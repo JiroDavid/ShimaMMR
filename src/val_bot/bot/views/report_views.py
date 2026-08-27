@@ -50,6 +50,18 @@ class TeamSelectView(discord.ui.View):
     async def _maybe_finish(self, interaction: discord.Interaction):
         if self.team_a_ids is None or self.team_b_ids is None:
             return
+        overlap = set(self.team_a_ids) & set(self.team_b_ids)
+        if overlap:
+            self.team_a_ids = None
+            self.team_b_ids = None
+            mentions = ", ".join(f"<@{discord_id}>" for discord_id in overlap)
+            await interaction.followup.send(
+                f"The following player(s) were selected on both teams: {mentions}. "
+                "Please run /report-match again.",
+                ephemeral=True,
+            )
+            self.stop()
+            return
         async with self.session_factory() as session:
             match = await build_pending_match(
                 session=session, map_name=self.map_name,
@@ -73,11 +85,20 @@ class MatchReportModal(discord.ui.Modal, title="Report Match"):
         self.on_built = on_built
 
     async def on_submit(self, interaction: discord.Interaction):
+        try:
+            team_a_score = int(str(self.team_a_score))
+            team_b_score = int(str(self.team_b_score))
+        except ValueError:
+            await interaction.response.send_message(
+                "Team scores must be whole numbers - please try /report-match again.",
+                ephemeral=True,
+            )
+            return
         view = TeamSelectView(
             session_factory=self.session_factory,
             map_name=str(self.map_name),
-            team_a_score=int(str(self.team_a_score)),
-            team_b_score=int(str(self.team_b_score)),
+            team_a_score=team_a_score,
+            team_b_score=team_b_score,
             reporter_id=str(interaction.user.id),
             on_built=self.on_built,
         )

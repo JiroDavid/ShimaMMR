@@ -1,5 +1,6 @@
 import respx
 import httpx
+from datetime import datetime, timezone
 from val_bot.ingestion.henrikdev import HenrikDevSource
 
 CONSENTED = [
@@ -11,9 +12,14 @@ MATCHLIST_RESPONSE = {
     "data": [{"metadata": {"matchid": "match-abc"}}],
 }
 
+MATCH_GAME_START = 1700000000
+
 MATCH_DETAILS_CUSTOM = {
     "data": {
-        "metadata": {"matchid": "match-abc", "map": "Ascent", "mode": "Custom"},
+        "metadata": {
+            "matchid": "match-abc", "map": "Ascent", "mode": "Custom",
+            "game_start": MATCH_GAME_START,
+        },
         "players": [
             {"puuid": "puuid-1", "team_id": "Red", "stats": {"kills": 20, "deaths": 10, "assists": 5, "score": 250}},
             {"puuid": "puuid-2", "team_id": "Red", "stats": {"kills": 10, "deaths": 15, "assists": 3, "score": 150}},
@@ -44,6 +50,7 @@ async def test_fetch_new_matches_returns_normalized_custom_game():
     assert match.source == "henrikdev"
     assert match.external_match_id == "match-abc"
     assert match.map == "Ascent"
+    assert match.played_at == datetime.fromtimestamp(MATCH_GAME_START, tz=timezone.utc)
     p1 = next(p for p in match.participants if p.discord_id == "1")
     assert p1.team == "A"
     assert p1.combat_score == 250

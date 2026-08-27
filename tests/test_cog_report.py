@@ -1,4 +1,4 @@
-from val_bot.bot.views.report_views import build_pending_match
+from val_bot.bot.views.report_views import build_pending_match, MatchReportModal, TeamSelectView
 from val_bot.db.models import Player
 
 async def test_build_pending_match_creates_match_row(db_session):
@@ -93,6 +93,57 @@ async def test_dispute_button_voids_pending_match(db_session):
 
     result = await db_session.execute(select(Match).where(Match.id == match_id))
     assert result.scalar_one_or_none() is None
+
+async def test_overlapping_team_selection_is_rejected(db_session):
+    for d in ("1", "2", "3", "4", "5", "6", "7", "8", "9"):
+        db_session.add(Player(discord_id=d))
+    await db_session.flush()
+
+    session_factory = MagicMock()
+    session_factory.return_value.__aenter__ = AsyncMock(return_value=db_session)
+    session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+    on_built = AsyncMock()
+
+    view = TeamSelectView(
+        session_factory=session_factory, map_name="Bind",
+        team_a_score=13, team_b_score=8, reporter_id="1", on_built=on_built,
+    )
+    interaction = MagicMock()
+    interaction.followup.send = AsyncMock()
+
+    # player "5" picked on both teams
+    view.team_a_ids = ["1", "2", "3", "4", "5"]
+    view.team_b_ids = ["5", "6", "7", "8", "9"]
+
+    await view._maybe_finish(interaction)
+
+    result = await db_session.execute(select(Match))
+    assert result.scalar_one_or_none() is None
+    on_built.assert_not_awaited()
+    interaction.followup.send.assert_awaited_once()
+    message = interaction.followup.send.await_args.args[0]
+    assert "<@5>" in message
+    assert view.team_a_ids is None
+    assert view.team_b_ids is None
+
+async def test_modal_rejects_non_numeric_score():
+    on_built = AsyncMock()
+    modal = MatchReportModal(session_factory=MagicMock(), on_built=on_built)
+    modal.map_name = "Bind"
+    modal.team_a_score = "thirteen"
+    modal.team_b_score = "8"
+
+    interaction = MagicMock()
+    interaction.user.id = "1"
+    interaction.response.send_message = AsyncMock()
+
+    await modal.on_submit(interaction)
+
+    interaction.response.send_message.assert_awaited_once()
+    kwargs = interaction.response.send_message.await_args.kwargs
+    assert kwargs.get("ephemeral") is True
+    assert "view" not in kwargs
+    on_built.assert_not_awaited()
 
 async def test_dispute_button_rejects_non_participant(db_session):
     match_id = await _pending_match(db_session)

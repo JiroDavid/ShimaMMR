@@ -23,6 +23,17 @@ class HenrikDevSource(MatchDataSource):
         resp.raise_for_status()
         return resp.json()["data"]
 
+    def _played_at(self, metadata: dict) -> datetime:
+        game_start = metadata.get("game_start")
+        if game_start is not None:
+            return datetime.fromtimestamp(game_start, tz=timezone.utc)
+        game_start_patched = metadata.get("game_start_patched")
+        if game_start_patched is not None:
+            return datetime.strptime(game_start_patched, "%Y/%m/%d %H:%M:%S").replace(
+                tzinfo=timezone.utc
+            )
+        return datetime.now(timezone.utc)
+
     def _normalize(self, details: dict) -> NormalizedMatch | None:
         if details.get("provisioningFlowID") != "CustomGame":
             return None
@@ -49,7 +60,7 @@ class HenrikDevSource(MatchDataSource):
             ))
 
         return NormalizedMatch(
-            played_at=datetime.now(timezone.utc),
+            played_at=self._played_at(details["metadata"]),
             map=details["metadata"]["map"],
             source="henrikdev",
             team_a_score=teams["red"]["rounds_won"],

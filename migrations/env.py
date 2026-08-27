@@ -1,4 +1,5 @@
 import asyncio
+import os
 from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config
@@ -12,6 +13,14 @@ from val_bot.db.models import Base
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
+
+# Override the ini's sqlalchemy.url with DB_PATH when set, so migrations
+# target the same database file the running bot connects to (see
+# val_bot.config.Config.from_env / val_bot.db.session.make_engine). Falls
+# back to the ini default for local dev when DB_PATH isn't set.
+db_path = os.environ.get("DB_PATH")
+if db_path:
+    config.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{db_path}")
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
