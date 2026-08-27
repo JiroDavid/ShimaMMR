@@ -1,5 +1,5 @@
 import discord
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from val_bot.ingestion.manual import ManualEntrySource
 from val_bot.db.match_service import create_pending_match, confirm_match
 from val_bot.db.models import Match, MatchParticipant
@@ -85,6 +85,19 @@ class MatchReportModal(discord.ui.Modal, title="Report Match"):
             "Now pick each team's players:", view=view, ephemeral=True
         )
 
+async def _participant_team(session, match_id: int, discord_id: str) -> str | None:
+    result = await session.execute(
+        select(MatchParticipant.team).where(
+            MatchParticipant.match_id == match_id,
+            MatchParticipant.discord_id == discord_id,
+        )
+    )
+    return result.scalar_one_or_none()
+
+def _has_admin_role(user) -> bool:
+    roles = getattr(user, "roles", None) or []
+    return discord.utils.get(roles, name="Admin") is not None
+
 class ConfirmDisputeView(discord.ui.View):
     def __init__(self, session_factory, match_id: int):
         super().__init__(timeout=3600)
@@ -94,6 +107,22 @@ class ConfirmDisputeView(discord.ui.View):
     @discord.ui.button(label="Confirm", style=discord.ButtonStyle.success)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         async with self.session_factory() as session:
+            match = await session.get(Match, self.match_id)
+            reporter_team = await _participant_team(
+                session, self.match_id, match.reported_by_discord_id
+            )
+            user_team = await _participant_team(session, self.match_id, str(interaction.user.id))
+            is_opposing_participant = (
+                reporter_team is not None
+                and user_team is not None
+                and user_team != reporter_team
+            )
+            if not (is_opposing_participant or _has_admin_role(interaction.user)):
+                await interaction.response.send_message(
+                    "Only someone on the opposing team (or an Admin) can confirm this match.",
+                    ephemeral=True,
+                )
+                return
             match = await confirm_match(session, self.match_id)
             await session.commit()
             lines = [
@@ -108,6 +137,14 @@ class ConfirmDisputeView(discord.ui.View):
     @discord.ui.button(label="Dispute", style=discord.ButtonStyle.danger)
     async def dispute(self, interaction: discord.Interaction, button: discord.ui.Button):
         async with self.session_factory() as session:
+            user_team = await _participant_team(session, self.match_id, str(interaction.user.id))
+            is_participant = user_team is not None
+            if not (is_participant or _has_admin_role(interaction.user)):
+                await interaction.response.send_message(
+                    "Only a match participant or an Admin can dispute this match.",
+                    ephemeral=True,
+                )
+                return
             await session.execute(
                 delete(MatchParticipant).where(MatchParticipant.match_id == self.match_id)
             )

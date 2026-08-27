@@ -49,6 +49,8 @@ async def test_confirm_button_applies_match(db_session):
 
     view = ConfirmDisputeView(session_factory, match_id)
     interaction = MagicMock()
+    interaction.user.id = "3"  # opposing-team participant (reporter "1" is on team A)
+    interaction.user.roles = []
     interaction.response.edit_message = AsyncMock()
 
     await view.confirm.callback(interaction)
@@ -56,6 +58,24 @@ async def test_confirm_button_applies_match(db_session):
     match = await db_session.get(Match, match_id)
     assert match.status == "confirmed"
     interaction.response.edit_message.assert_awaited_once()
+
+async def test_confirm_button_rejects_reporter(db_session):
+    match_id = await _pending_match(db_session)
+    session_factory = MagicMock()
+    session_factory.return_value.__aenter__ = AsyncMock(return_value=db_session)
+    session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    view = ConfirmDisputeView(session_factory, match_id)
+    interaction = MagicMock()
+    interaction.user.id = "1"  # the reporter, same team as themselves
+    interaction.user.roles = []
+    interaction.response.send_message = AsyncMock()
+
+    await view.confirm.callback(interaction)
+
+    match = await db_session.get(Match, match_id)
+    assert match.status == "pending"
+    interaction.response.send_message.assert_awaited_once()
 
 async def test_dispute_button_voids_pending_match(db_session):
     match_id = await _pending_match(db_session)
@@ -65,9 +85,29 @@ async def test_dispute_button_voids_pending_match(db_session):
 
     view = ConfirmDisputeView(session_factory, match_id)
     interaction = MagicMock()
+    interaction.user.id = "1"  # the reporter may retract their own report
+    interaction.user.roles = []
     interaction.response.edit_message = AsyncMock()
 
     await view.dispute.callback(interaction)
 
     result = await db_session.execute(select(Match).where(Match.id == match_id))
     assert result.scalar_one_or_none() is None
+
+async def test_dispute_button_rejects_non_participant(db_session):
+    match_id = await _pending_match(db_session)
+    session_factory = MagicMock()
+    session_factory.return_value.__aenter__ = AsyncMock(return_value=db_session)
+    session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    view = ConfirmDisputeView(session_factory, match_id)
+    interaction = MagicMock()
+    interaction.user.id = "999"  # not a participant, not an admin
+    interaction.user.roles = []
+    interaction.response.send_message = AsyncMock()
+
+    await view.dispute.callback(interaction)
+
+    result = await db_session.execute(select(Match).where(Match.id == match_id))
+    assert result.scalar_one_or_none() is not None
+    interaction.response.send_message.assert_awaited_once()
