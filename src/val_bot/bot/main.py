@@ -13,6 +13,8 @@ class ValBot(commands.Bot):
         self.henrikdev_api_key = henrikdev_api_key
 
     async def setup_hook(self):
+        from val_bot.bot.cogs.linking import setup as setup_linking
+        await setup_linking(self)
         await self.tree.sync()
 
 def build_bot(config: Config, session_factory) -> ValBot:
