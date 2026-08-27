@@ -11,14 +11,14 @@ class LeaderboardCog(commands.Cog):
     @app_commands.command(name="leaderboard", description="Show the server MMR leaderboard")
     async def leaderboard(self, interaction: discord.Interaction):
         view = LeaderboardView(self.bot.session_factory)
-        content = await view.render()
-        await interaction.response.send_message(content=content, view=view)
+        embed = await view.render()
+        await interaction.response.send_message(embed=embed, view=view)
 
     @commands.command(name="leaderboard")
     async def leaderboard_prefix(self, ctx: commands.Context):
         view = LeaderboardView(self.bot.session_factory)
-        content = await view.render()
-        await ctx.send(content=content, view=view)
+        embed = await view.render()
+        await ctx.send(embed=embed, view=view)
 
 
 async def setup(bot):
