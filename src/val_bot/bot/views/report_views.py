@@ -106,6 +106,22 @@ class MatchReportModal(discord.ui.Modal, title="Report Match"):
             "Now pick each team's players:", view=view, ephemeral=True
         )
 
+class StartReportView(discord.ui.View):
+    """Entry point for v!report-match: a modal can only be opened in
+    response to an interaction (never a plain text command), so the
+    prefix command posts this button instead — clicking it opens the
+    exact same MatchReportModal the slash command opens directly."""
+
+    def __init__(self, session_factory, on_built):
+        super().__init__(timeout=300)
+        self.session_factory = session_factory
+        self.on_built = on_built
+
+    @discord.ui.button(label="Start Report", style=discord.ButtonStyle.primary)
+    async def start_report(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = MatchReportModal(self.session_factory, self.on_built)
+        await interaction.response.send_modal(modal)
+
 async def _participant_team(session, match_id: int, discord_id: str) -> str | None:
     result = await session.execute(
         select(MatchParticipant.team).where(

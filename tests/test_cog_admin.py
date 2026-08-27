@@ -32,26 +32,24 @@ def _session_factory(db_session):
 
 async def test_void_match_callback_voids_and_responds(db_session):
     match_id = await _confirmed_match_id(db_session)
-    interaction = MagicMock()
-    interaction.response.send_message = AsyncMock()
+    send = AsyncMock()
 
-    await void_match_callback(interaction, _session_factory(db_session), match_id)
+    await void_match_callback(send, _session_factory(db_session), match_id)
 
     match = await db_session.get(Match, match_id)
     assert match.status == "voided"
-    interaction.response.send_message.assert_awaited_once()
+    send.assert_awaited_once()
 
 async def test_correct_match_callback_updates_scores(db_session):
     match_id = await _confirmed_match_id(db_session)
-    interaction = MagicMock()
-    interaction.response.send_message = AsyncMock()
+    send = AsyncMock()
 
     await correct_match_callback(
-        interaction, _session_factory(db_session), match_id,
+        send, _session_factory(db_session), match_id,
         team_a_score=13, team_b_score=11,
     )
 
     match = await db_session.get(Match, match_id)
     assert match.team_a_score == 13
     assert match.team_b_score == 11
-    interaction.response.send_message.assert_awaited_once()
+    send.assert_awaited_once()

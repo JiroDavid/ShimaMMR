@@ -14,6 +14,12 @@ class LeaderboardCog(commands.Cog):
         content = await view.render()
         await interaction.response.send_message(content=content, view=view)
 
+    @commands.command(name="leaderboard")
+    async def leaderboard_prefix(self, ctx: commands.Context):
+        view = LeaderboardView(self.bot.session_factory)
+        content = await view.render()
+        await ctx.send(content=content, view=view)
+
 
 async def setup(bot):
     await bot.add_cog(LeaderboardCog(bot))

@@ -31,5 +31,15 @@ class MmrCog(commands.Cog):
             return
         await interaction.response.send_message(embed=embed)
 
+    @commands.command(name="mmr")
+    async def mmr_prefix(self, ctx: commands.Context, user: discord.Member | None = None):
+        target = user or ctx.author
+        async with self.bot.session_factory() as session:
+            embed = await build_mmr_embed(session, str(target.id))
+        if embed is None:
+            await ctx.send(f"{target.mention} hasn't played a rated match yet.")
+            return
+        await ctx.send(embed=embed)
+
 async def setup(bot):
     await bot.add_cog(MmrCog(bot))

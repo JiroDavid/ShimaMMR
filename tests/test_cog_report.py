@@ -145,6 +145,24 @@ async def test_modal_rejects_non_numeric_score():
     assert "view" not in kwargs
     on_built.assert_not_awaited()
 
+async def test_start_report_button_opens_modal():
+    from val_bot.bot.views.report_views import StartReportView
+
+    on_built = AsyncMock()
+    session_factory = MagicMock()
+    view = StartReportView(session_factory=session_factory, on_built=on_built)
+
+    interaction = MagicMock()
+    interaction.response.send_modal = AsyncMock()
+
+    await view.start_report.callback(interaction)
+
+    interaction.response.send_modal.assert_awaited_once()
+    modal = interaction.response.send_modal.await_args.args[0]
+    assert isinstance(modal, MatchReportModal)
+    assert modal.session_factory is session_factory
+    assert modal.on_built is on_built
+
 async def test_dispute_button_rejects_non_participant(db_session):
     match_id = await _pending_match(db_session)
     session_factory = MagicMock()

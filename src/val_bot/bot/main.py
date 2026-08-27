@@ -8,7 +8,8 @@ class ValBot(commands.Bot):
     def __init__(self, session_factory, henrikdev_api_key: str | None):
         intents = discord.Intents.default()
         intents.members = True
-        super().__init__(command_prefix="!", intents=intents)
+        intents.message_content = True
+        super().__init__(command_prefix="v!", intents=intents)
         self.session_factory = session_factory
         self.henrikdev_api_key = henrikdev_api_key
 
@@ -35,6 +36,10 @@ def build_bot(config: Config, session_factory) -> ValBot:
     @bot.tree.command(name="ping", description="Check that the bot is alive")
     async def ping(interaction: discord.Interaction):
         await interaction.response.send_message("pong", ephemeral=True)
+
+    @bot.command(name="ping")
+    async def ping_prefix(ctx: commands.Context):
+        await ctx.send("pong")
 
     return bot
 

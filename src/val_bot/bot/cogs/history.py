@@ -26,5 +26,22 @@ class HistoryCog(commands.Cog):
             view=FullMatchView(self.bot.session_factory, matches[0].id),
         )
 
+    @commands.command(name="match-history")
+    async def match_history_prefix(self, ctx: commands.Context, user: discord.Member | None = None):
+        target = user or ctx.author
+        discord_id = str(target.id)
+        async with self.bot.session_factory() as session:
+            matches = await fetch_recent_matches(session, discord_id)
+            summaries = [format_match_summary(m, discord_id) for m in matches]
+
+        if not matches:
+            await ctx.send(f"{target.mention} has no confirmed match history yet.")
+            return
+
+        await ctx.send(
+            "\n".join(summaries),
+            view=FullMatchView(self.bot.session_factory, matches[0].id),
+        )
+
 async def setup(bot):
     await bot.add_cog(HistoryCog(bot))

@@ -52,5 +52,29 @@ class SyncCog(commands.Cog):
                 "Each needs confirmation before MMR applies — check the pending matches."
             )
 
+    @commands.command(name="sync-matches")
+    @commands.has_role("Admin")
+    async def sync_matches_prefix(self, ctx: commands.Context):
+        async with self.bot.session_factory() as session:
+            result = await session.execute(select(Player).where(Player.consented.is_(True)))
+            consented = [
+                {"discord_id": p.discord_id, "puuid": p.riot_username}
+                for p in result.scalars() if p.riot_username
+            ]
+
+            def source_factory():
+                return HenrikDevSource(self.bot.henrikdev_api_key, consented)
+
+            new_ids = await sync_matches(session, source_factory)
+            await session.commit()
+
+        if not new_ids:
+            await ctx.send("No new matches found.")
+        else:
+            await ctx.send(
+                f"Found {len(new_ids)} new match(es): {', '.join(f'#{i}' for i in new_ids)}. "
+                "Each needs confirmation before MMR applies — check the pending matches."
+            )
+
 async def setup(bot):
     await bot.add_cog(SyncCog(bot))
