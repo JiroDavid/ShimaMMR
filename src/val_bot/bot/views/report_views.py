@@ -1,7 +1,8 @@
 import discord
+from sqlalchemy import delete
 from val_bot.ingestion.manual import ManualEntrySource
-from val_bot.db.match_service import create_pending_match
-from val_bot.db.models import Match
+from val_bot.db.match_service import create_pending_match, confirm_match
+from val_bot.db.models import Match, MatchParticipant
 
 _manual_source = ManualEntrySource()
 
@@ -82,4 +83,36 @@ class MatchReportModal(discord.ui.Modal, title="Report Match"):
         )
         await interaction.response.send_message(
             "Now pick each team's players:", view=view, ephemeral=True
+        )
+
+class ConfirmDisputeView(discord.ui.View):
+    def __init__(self, session_factory, match_id: int):
+        super().__init__(timeout=3600)
+        self.session_factory = session_factory
+        self.match_id = match_id
+
+    @discord.ui.button(label="Confirm", style=discord.ButtonStyle.success)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        async with self.session_factory() as session:
+            match = await confirm_match(session, self.match_id)
+            await session.commit()
+            lines = [
+                f"<@{p.discord_id}>: {p.mmr_before} → {p.mmr_after} "
+                f"({'+' if p.mmr_after >= p.mmr_before else ''}{p.mmr_after - p.mmr_before})"
+                for p in match.participants
+            ]
+        await interaction.response.edit_message(
+            content="Match confirmed! MMR changes:\n" + "\n".join(lines), view=None
+        )
+
+    @discord.ui.button(label="Dispute", style=discord.ButtonStyle.danger)
+    async def dispute(self, interaction: discord.Interaction, button: discord.ui.Button):
+        async with self.session_factory() as session:
+            await session.execute(
+                delete(MatchParticipant).where(MatchParticipant.match_id == self.match_id)
+            )
+            await session.execute(delete(Match).where(Match.id == self.match_id))
+            await session.commit()
+        await interaction.response.edit_message(
+            content="Match disputed and discarded. No MMR was applied.", view=None
         )
