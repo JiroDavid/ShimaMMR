@@ -89,19 +89,35 @@ async def _seed_state_before(session: AsyncSession, discord_id: str, from_played
         streak += 1
     return mmr, games, streak
 
-async def recompute_from(session: AsyncSession, from_played_at: datetime) -> None:
+async def recompute_from(
+    session: AsyncSession,
+    from_played_at: datetime,
+    discord_ids: set[str] | None = None,
+) -> None:
+    """Replay confirmed matches at/after `from_played_at` and rewrite their
+    mmr_before/mmr_after plus each affected Player's mmr/games_played.
+
+    `discord_ids` should include the participants of whatever match triggered
+    this call (e.g. the one just voided or corrected), even if that match
+    itself is no longer "confirmed" and therefore won't appear in the replay
+    query below. Without this, voiding the chronologically-last confirmed
+    match for a player would leave nothing to replay and their Player row
+    would never be reset to reflect the void.
+    """
     result = await session.execute(
         select(Match)
         .where(Match.status == "confirmed", Match.played_at >= from_played_at)
         .order_by(Match.played_at.asc())
     )
     matches = list(result.scalars().unique())
-    if not matches:
+
+    all_discord_ids = set(discord_ids or ())
+    all_discord_ids |= {p.discord_id for m in matches for p in m.participants}
+    if not all_discord_ids:
         return
 
-    discord_ids = {p.discord_id for m in matches for p in m.participants}
     current_mmr, games_played, loss_streak = {}, {}, {}
-    for discord_id in discord_ids:
+    for discord_id in all_discord_ids:
         mmr, games, streak = await _seed_state_before(session, discord_id, from_played_at)
         current_mmr[discord_id] = mmr
         games_played[discord_id] = games
@@ -116,7 +132,7 @@ async def recompute_from(session: AsyncSession, from_played_at: datetime) -> Non
         for p in match.participants:
             p.mmr_before, p.mmr_after = results[p.discord_id]
 
-    for discord_id in discord_ids:
+    for discord_id in all_discord_ids:
         player = await session.get(Player, discord_id)
         player.mmr = current_mmr[discord_id]
         player.games_played = games_played[discord_id]
@@ -126,9 +142,10 @@ async def recompute_from(session: AsyncSession, from_played_at: datetime) -> Non
 async def void_match(session: AsyncSession, match_id: int) -> None:
     match = await session.get(Match, match_id)
     played_at = match.played_at
+    discord_ids = {p.discord_id for p in match.participants}
     match.status = "voided"
     await session.flush()
-    await recompute_from(session, played_at)
+    await recompute_from(session, played_at, discord_ids)
 
 async def correct_match(
     session: AsyncSession,
@@ -153,5 +170,6 @@ async def correct_match(
                 setattr(p, field_name, updates[field_name])
 
     played_at = match.played_at
+    discord_ids = {p.discord_id for p in match.participants}
     await session.flush()
-    await recompute_from(session, played_at)
+    await recompute_from(session, played_at, discord_ids)

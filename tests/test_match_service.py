@@ -103,3 +103,18 @@ async def test_void_match_removes_its_contribution(db_session):
     m1_a = next(p for p in m1.participants if p.discord_id == "a")
     m3_a = next(p for p in m3.participants if p.discord_id == "a")
     assert m3_a.mmr_before == m1_a.mmr_after
+
+async def test_void_last_match_resets_player_state(db_session):
+    """Voiding the chronologically-last confirmed match for a set of players
+    leaves nothing to replay forward, so recompute_from must still roll back
+    Player.mmr/games_played to their pre-that-match state instead of leaving
+    it stale from confirm_match's original write."""
+    m1, m2, m3 = await _play_three_matches(db_session)
+    await void_match(db_session, m3.id)
+
+    await db_session.refresh(m2, attribute_names=["participants"])
+    for discord_id in ("a", "b", "c", "d"):
+        m2_row = next(p for p in m2.participants if p.discord_id == discord_id)
+        player = await db_session.get(Player, discord_id)
+        assert player.mmr == m2_row.mmr_after
+        assert player.games_played == 2
