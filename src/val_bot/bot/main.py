@@ -17,6 +17,8 @@ class ValBot(commands.Bot):
         await setup_linking(self)
         from val_bot.bot.cogs.report import setup as setup_report
         await setup_report(self)
+        from val_bot.bot.cogs.mmr import setup as setup_mmr
+        await setup_mmr(self)
         await self.tree.sync()
 
 def build_bot(config: Config, session_factory) -> ValBot:
