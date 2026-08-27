@@ -6,4 +6,4 @@ COPY src ./src
 COPY migrations ./migrations
 COPY alembic.ini ./
 RUN pip install --no-cache-dir -e .
-CMD ["python", "-m", "val_bot.bot.main"]
+CMD ["sh", "-c", "alembic upgrade head && python -m val_bot.bot.main"]
