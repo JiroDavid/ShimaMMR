@@ -25,6 +25,8 @@ class ValBot(commands.Bot):
         await setup_history(self)
         from val_bot.bot.cogs.admin import setup as setup_admin
         await setup_admin(self)
+        from val_bot.bot.cogs.sync import setup as setup_sync
+        await setup_sync(self)
         await self.tree.sync()
 
 def build_bot(config: Config, session_factory) -> ValBot:
