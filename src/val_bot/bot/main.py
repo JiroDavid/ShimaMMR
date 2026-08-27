@@ -19,6 +19,8 @@ class ValBot(commands.Bot):
         await setup_report(self)
         from val_bot.bot.cogs.mmr import setup as setup_mmr
         await setup_mmr(self)
+        from val_bot.bot.cogs.leaderboard import setup as setup_leaderboard
+        await setup_leaderboard(self)
         await self.tree.sync()
 
 def build_bot(config: Config, session_factory) -> ValBot:
