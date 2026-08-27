@@ -67,3 +67,91 @@ async def confirm_match(session: AsyncSession, match_id: int) -> Match:
     match.status = "confirmed"
     await session.flush()
     return match
+
+async def _seed_state_before(session: AsyncSession, discord_id: str, from_played_at: datetime):
+    result = await session.execute(
+        select(MatchParticipant)
+        .join(Match)
+        .where(
+            MatchParticipant.discord_id == discord_id,
+            Match.status == "confirmed",
+            Match.played_at < from_played_at,
+        )
+        .order_by(Match.played_at.desc())
+    )
+    rows = list(result.scalars())
+    games = len(rows)
+    mmr = rows[0].mmr_after if rows else 700
+    streak = 0
+    for row in rows:
+        if row.won:
+            break
+        streak += 1
+    return mmr, games, streak
+
+async def recompute_from(session: AsyncSession, from_played_at: datetime) -> None:
+    result = await session.execute(
+        select(Match)
+        .where(Match.status == "confirmed", Match.played_at >= from_played_at)
+        .order_by(Match.played_at.asc())
+    )
+    matches = list(result.scalars().unique())
+    if not matches:
+        return
+
+    discord_ids = {p.discord_id for m in matches for p in m.participants}
+    current_mmr, games_played, loss_streak = {}, {}, {}
+    for discord_id in discord_ids:
+        mmr, games, streak = await _seed_state_before(session, discord_id, from_played_at)
+        current_mmr[discord_id] = mmr
+        games_played[discord_id] = games
+        loss_streak[discord_id] = streak
+
+    for match in matches:
+        participant_inputs = [
+            ParticipantInput(p.discord_id, p.team, p.won, p.combat_score)
+            for p in match.participants
+        ]
+        results = rate_match(participant_inputs, current_mmr, games_played, loss_streak)
+        for p in match.participants:
+            p.mmr_before, p.mmr_after = results[p.discord_id]
+
+    for discord_id in discord_ids:
+        player = await session.get(Player, discord_id)
+        player.mmr = current_mmr[discord_id]
+        player.games_played = games_played[discord_id]
+
+    await session.flush()
+
+async def void_match(session: AsyncSession, match_id: int) -> None:
+    match = await session.get(Match, match_id)
+    played_at = match.played_at
+    match.status = "voided"
+    await session.flush()
+    await recompute_from(session, played_at)
+
+async def correct_match(
+    session: AsyncSession,
+    match_id: int,
+    team_a_score: int | None = None,
+    team_b_score: int | None = None,
+    participant_updates: dict[str, dict] | None = None,
+) -> None:
+    match = await session.get(Match, match_id)
+    if team_a_score is not None:
+        match.team_a_score = team_a_score
+    if team_b_score is not None:
+        match.team_b_score = team_b_score
+    winning_team = "A" if match.team_a_score > match.team_b_score else "B"
+
+    participant_updates = participant_updates or {}
+    for p in match.participants:
+        p.won = (p.team == winning_team)
+        updates = participant_updates.get(p.discord_id, {})
+        for field_name in ("kills", "deaths", "assists", "combat_score"):
+            if field_name in updates:
+                setattr(p, field_name, updates[field_name])
+
+    played_at = match.played_at
+    await session.flush()
+    await recompute_from(session, played_at)
