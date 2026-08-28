@@ -1,9 +1,18 @@
 from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from val_bot.db.models import Player, Match, MatchParticipant
 from val_bot.ingestion.base import NormalizedMatch
 from val_bot.rating.engine import ParticipantInput, rate_match
+
+async def _get_match_with_participants(session: AsyncSession, match_id: int) -> Match:
+    result = await session.execute(
+        select(Match)
+        .options(selectinload(Match.participants))
+        .where(Match.id == match_id)
+    )
+    return result.scalar_one()
 
 async def create_pending_match(session: AsyncSession, normalized: NormalizedMatch) -> Match:
     winning_team = "A" if normalized.team_a_score > normalized.team_b_score else "B"
@@ -47,7 +56,7 @@ async def _seed_state(session: AsyncSession, discord_ids: set[str]):
     return current_mmr, games_played, loss_streak
 
 async def confirm_match(session: AsyncSession, match_id: int) -> Match:
-    match = await session.get(Match, match_id)
+    match = await _get_match_with_participants(session, match_id)
     discord_ids = {p.discord_id for p in match.participants}
     current_mmr, games_played, loss_streak = await _seed_state(session, discord_ids)
 
@@ -106,6 +115,7 @@ async def recompute_from(
     """
     result = await session.execute(
         select(Match)
+        .options(selectinload(Match.participants))
         .where(Match.status == "confirmed", Match.played_at >= from_played_at)
         .order_by(Match.played_at.asc())
     )
@@ -140,7 +150,7 @@ async def recompute_from(
     await session.flush()
 
 async def void_match(session: AsyncSession, match_id: int) -> None:
-    match = await session.get(Match, match_id)
+    match = await _get_match_with_participants(session, match_id)
     played_at = match.played_at
     discord_ids = {p.discord_id for p in match.participants}
     match.status = "voided"
@@ -154,7 +164,7 @@ async def correct_match(
     team_b_score: int | None = None,
     participant_updates: dict[str, dict] | None = None,
 ) -> None:
-    match = await session.get(Match, match_id)
+    match = await _get_match_with_participants(session, match_id)
     if team_a_score is not None:
         match.team_a_score = team_a_score
     if team_b_score is not None:

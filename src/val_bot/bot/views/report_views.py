@@ -2,7 +2,7 @@ import discord
 from sqlalchemy import delete, select
 from val_bot.ingestion.manual import ManualEntrySource
 from val_bot.db.match_service import create_pending_match, confirm_match
-from val_bot.db.models import Match, MatchParticipant
+from val_bot.db.models import Match, MatchParticipant, Player
 
 _manual_source = ManualEntrySource()
 
@@ -63,6 +63,26 @@ class TeamSelectView(discord.ui.View):
             self.stop()
             return
         async with self.session_factory() as session:
+            all_ids = self.team_a_ids + self.team_b_ids
+            result = await session.execute(
+                select(Player.discord_id).where(
+                    Player.discord_id.in_(all_ids), Player.consented.is_(True)
+                )
+            )
+            linked_ids = set(result.scalars().all())
+            unlinked = [d for d in all_ids if d not in linked_ids]
+            if unlinked:
+                self.team_a_ids = None
+                self.team_b_ids = None
+                mentions = ", ".join(f"<@{discord_id}>" for discord_id in unlinked)
+                await interaction.followup.send(
+                    f"The following player(s) haven't run /link yet, so they can't be "
+                    f"added to a match: {mentions}. Please run /report-match again once "
+                    "they've linked.",
+                    ephemeral=True,
+                )
+                self.stop()
+                return
             match = await build_pending_match(
                 session=session, map_name=self.map_name,
                 team_a_score=self.team_a_score, team_b_score=self.team_b_score,
@@ -132,8 +152,8 @@ async def _participant_team(session, match_id: int, discord_id: str) -> str | No
     return result.scalar_one_or_none()
 
 def _has_admin_role(user) -> bool:
-    roles = getattr(user, "roles", None) or []
-    return discord.utils.get(roles, name="Admin") is not None
+    perms = getattr(user, "guild_permissions", None)
+    return bool(getattr(perms, "administrator", False))
 
 class ConfirmDisputeView(discord.ui.View):
     def __init__(self, session_factory, match_id: int):

@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
-from val_bot.db.models import Player
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from val_bot.db.models import Base, Player
 from val_bot.db.match_service import create_pending_match, confirm_match
 from val_bot.ingestion.base import NormalizedMatch, NormalizedParticipant
 
@@ -43,6 +44,28 @@ async def test_confirm_match_applies_ratings(db_session):
     winner_row = next(p for p in confirmed.participants if p.discord_id == "p1")
     assert winner_row.mmr_before == 700
     assert winner_row.mmr_after == p1.mmr
+
+async def test_confirm_match_works_from_a_fresh_session():
+    # Mirrors production: /report-match creates the match in one interaction's
+    # session, then a *different* interaction's session confirms it later -
+    # match.participants must not rely on already being resident in memory.
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with AsyncSession(engine, expire_on_commit=False) as creating_session:
+            for d in ("p1", "p2", "p3", "p4"):
+                creating_session.add(Player(discord_id=d))
+            await creating_session.flush()
+            match = await create_pending_match(creating_session, _normalized_match())
+            await creating_session.commit()
+            match_id = match.id
+
+        async with AsyncSession(engine, expire_on_commit=False) as confirming_session:
+            confirmed = await confirm_match(confirming_session, match_id)
+            assert confirmed.status == "confirmed"
+    finally:
+        await engine.dispose()
 
 from val_bot.db.match_service import void_match, correct_match
 

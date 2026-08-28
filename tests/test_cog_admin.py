@@ -1,6 +1,10 @@
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from datetime import datetime, timezone
-from val_bot.bot.cogs.admin import void_match_callback, correct_match_callback
+import pytest
+from discord import app_commands
+from discord.ext import commands
+from val_bot.bot.cogs.admin import AdminCog, void_match_callback, correct_match_callback
 from val_bot.db.models import Player, Match
 from val_bot.db.match_service import create_pending_match, confirm_match
 from val_bot.ingestion.base import NormalizedMatch, NormalizedParticipant
@@ -53,3 +57,31 @@ async def test_correct_match_callback_updates_scores(db_session):
     assert match.team_a_score == 13
     assert match.team_b_score == 11
     send.assert_awaited_once()
+
+def test_void_match_app_command_gates_on_administrator_permission():
+    predicate = AdminCog.void_match_cmd.checks[0]
+
+    with pytest.raises(app_commands.MissingPermissions):
+        predicate(SimpleNamespace(permissions=SimpleNamespace(administrator=False)))
+    assert predicate(SimpleNamespace(permissions=SimpleNamespace(administrator=True))) is True
+
+def test_void_match_prefix_command_gates_on_administrator_permission():
+    predicate = AdminCog.void_match_prefix.checks[0]
+
+    with pytest.raises(commands.MissingPermissions):
+        predicate(SimpleNamespace(permissions=SimpleNamespace(administrator=False)))
+    assert predicate(SimpleNamespace(permissions=SimpleNamespace(administrator=True))) is True
+
+def test_correct_match_app_command_gates_on_administrator_permission():
+    predicate = AdminCog.correct_match_cmd.checks[0]
+
+    with pytest.raises(app_commands.MissingPermissions):
+        predicate(SimpleNamespace(permissions=SimpleNamespace(administrator=False)))
+    assert predicate(SimpleNamespace(permissions=SimpleNamespace(administrator=True))) is True
+
+def test_correct_match_prefix_command_gates_on_administrator_permission():
+    predicate = AdminCog.correct_match_prefix.checks[0]
+
+    with pytest.raises(commands.MissingPermissions):
+        predicate(SimpleNamespace(permissions=SimpleNamespace(administrator=False)))
+    assert predicate(SimpleNamespace(permissions=SimpleNamespace(administrator=True))) is True

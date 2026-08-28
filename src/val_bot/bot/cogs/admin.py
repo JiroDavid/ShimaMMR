@@ -23,14 +23,14 @@ class AdminCog(commands.Cog):
         self.bot = bot
 
     @app_commands.command(name="void-match", description="Void a match (Admin only)")
-    @app_commands.checks.has_role("Admin")
+    @app_commands.checks.has_permissions(administrator=True)
     async def void_match_cmd(self, interaction: discord.Interaction, match_id: int):
         async def send(content):
             await interaction.response.send_message(content, ephemeral=True)
         await void_match_callback(send, self.bot.session_factory, match_id)
 
     @app_commands.command(name="correct-match", description="Correct a match's scores (Admin only)")
-    @app_commands.checks.has_role("Admin")
+    @app_commands.checks.has_permissions(administrator=True)
     async def correct_match_cmd(
         self, interaction: discord.Interaction, match_id: int,
         team_a_score: int | None = None, team_b_score: int | None = None,
@@ -40,12 +40,12 @@ class AdminCog(commands.Cog):
         await correct_match_callback(send, self.bot.session_factory, match_id, team_a_score, team_b_score)
 
     @commands.command(name="void-match")
-    @commands.has_role("Admin")
+    @commands.has_permissions(administrator=True)
     async def void_match_prefix(self, ctx: commands.Context, match_id: int):
         await void_match_callback(ctx.send, self.bot.session_factory, match_id)
 
     @commands.command(name="correct-match")
-    @commands.has_role("Admin")
+    @commands.has_permissions(administrator=True)
     async def correct_match_prefix(
         self, ctx: commands.Context, match_id: int,
         team_a_score: int | None = None, team_b_score: int | None = None,

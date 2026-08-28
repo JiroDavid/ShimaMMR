@@ -28,7 +28,7 @@ class SyncCog(commands.Cog):
         self.bot = bot
 
     @app_commands.command(name="sync-matches", description="Check HenrikDev for new pickup matches (Admin only)")
-    @app_commands.checks.has_role("Admin")
+    @app_commands.checks.has_permissions(administrator=True)
     async def sync_matches_cmd(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         async with self.bot.session_factory() as session:
@@ -53,7 +53,7 @@ class SyncCog(commands.Cog):
             )
 
     @commands.command(name="sync-matches")
-    @commands.has_role("Admin")
+    @commands.has_permissions(administrator=True)
     async def sync_matches_prefix(self, ctx: commands.Context):
         async with self.bot.session_factory() as session:
             result = await session.execute(select(Player).where(Player.consented.is_(True)))

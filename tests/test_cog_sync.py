@@ -1,6 +1,10 @@
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
+import pytest
+from discord import app_commands
+from discord.ext import commands
 from sqlalchemy import select
-from val_bot.bot.cogs.sync import sync_matches
+from val_bot.bot.cogs.sync import SyncCog, sync_matches
 from val_bot.db.models import Player, Match
 from val_bot.ingestion.base import NormalizedMatch, NormalizedParticipant
 from datetime import datetime, timezone
@@ -49,3 +53,17 @@ async def test_sync_matches_skips_already_ingested_external_id(db_session):
     second_ids = await sync_matches(db_session, _fake_source([normalized]))
     assert len(first_ids) == 1
     assert second_ids == []
+
+def test_sync_matches_app_command_gates_on_administrator_permission():
+    predicate = SyncCog.sync_matches_cmd.checks[0]
+
+    with pytest.raises(app_commands.MissingPermissions):
+        predicate(SimpleNamespace(permissions=SimpleNamespace(administrator=False)))
+    assert predicate(SimpleNamespace(permissions=SimpleNamespace(administrator=True))) is True
+
+def test_sync_matches_prefix_command_gates_on_administrator_permission():
+    predicate = SyncCog.sync_matches_prefix.checks[0]
+
+    with pytest.raises(commands.MissingPermissions):
+        predicate(SimpleNamespace(permissions=SimpleNamespace(administrator=False)))
+    assert predicate(SimpleNamespace(permissions=SimpleNamespace(administrator=True))) is True

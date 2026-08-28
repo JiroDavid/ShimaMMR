@@ -51,6 +51,7 @@ async def test_confirm_button_applies_match(db_session):
     interaction = MagicMock()
     interaction.user.id = "3"  # opposing-team participant (reporter "1" is on team A)
     interaction.user.roles = []
+    interaction.user.guild_permissions.administrator = False
     interaction.response.edit_message = AsyncMock()
 
     await view.confirm.callback(interaction)
@@ -69,6 +70,7 @@ async def test_confirm_button_rejects_reporter(db_session):
     interaction = MagicMock()
     interaction.user.id = "1"  # the reporter, same team as themselves
     interaction.user.roles = []
+    interaction.user.guild_permissions.administrator = False
     interaction.response.send_message = AsyncMock()
 
     await view.confirm.callback(interaction)
@@ -76,6 +78,25 @@ async def test_confirm_button_rejects_reporter(db_session):
     match = await db_session.get(Match, match_id)
     assert match.status == "pending"
     interaction.response.send_message.assert_awaited_once()
+
+async def test_confirm_button_accepts_users_with_administrator_permission(db_session):
+    match_id = await _pending_match(db_session)
+    session_factory = MagicMock()
+    session_factory.return_value.__aenter__ = AsyncMock(return_value=db_session)
+    session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    view = ConfirmDisputeView(session_factory, match_id)
+    interaction = MagicMock()
+    interaction.user.id = "1"  # the reporter - would normally be rejected
+    interaction.user.roles = []  # no role named "Admin" at all - e.g. "CORE", "Organisers"
+    interaction.user.guild_permissions.administrator = True
+    interaction.response.edit_message = AsyncMock()
+
+    await view.confirm.callback(interaction)
+
+    match = await db_session.get(Match, match_id)
+    assert match.status == "confirmed"
+    interaction.response.edit_message.assert_awaited_once()
 
 async def test_dispute_button_voids_pending_match(db_session):
     match_id = await _pending_match(db_session)
@@ -87,6 +108,7 @@ async def test_dispute_button_voids_pending_match(db_session):
     interaction = MagicMock()
     interaction.user.id = "1"  # the reporter may retract their own report
     interaction.user.roles = []
+    interaction.user.guild_permissions.administrator = False
     interaction.response.edit_message = AsyncMock()
 
     await view.dispute.callback(interaction)
@@ -114,6 +136,38 @@ async def test_overlapping_team_selection_is_rejected(db_session):
     # player "5" picked on both teams
     view.team_a_ids = ["1", "2", "3", "4", "5"]
     view.team_b_ids = ["5", "6", "7", "8", "9"]
+
+    await view._maybe_finish(interaction)
+
+    result = await db_session.execute(select(Match))
+    assert result.scalar_one_or_none() is None
+    on_built.assert_not_awaited()
+    interaction.followup.send.assert_awaited_once()
+    message = interaction.followup.send.await_args.args[0]
+    assert "<@5>" in message
+    assert view.team_a_ids is None
+    assert view.team_b_ids is None
+
+async def test_unlinked_player_selection_is_rejected(db_session):
+    for d in ("1", "2", "3", "4", "5", "6", "7", "8", "9", "10"):
+        db_session.add(Player(discord_id=d, consented=(d != "5")))
+    await db_session.flush()
+
+    session_factory = MagicMock()
+    session_factory.return_value.__aenter__ = AsyncMock(return_value=db_session)
+    session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+    on_built = AsyncMock()
+
+    view = TeamSelectView(
+        session_factory=session_factory, map_name="Bind",
+        team_a_score=13, team_b_score=8, reporter_id="1", on_built=on_built,
+    )
+    interaction = MagicMock()
+    interaction.followup.send = AsyncMock()
+
+    # player "5" hasn't run /link yet
+    view.team_a_ids = ["1", "2", "3", "4", "5"]
+    view.team_b_ids = ["6", "7", "8", "9", "10"]
 
     await view._maybe_finish(interaction)
 
@@ -173,6 +227,7 @@ async def test_dispute_button_rejects_non_participant(db_session):
     interaction = MagicMock()
     interaction.user.id = "999"  # not a participant, not an admin
     interaction.user.roles = []
+    interaction.user.guild_permissions.administrator = False
     interaction.response.send_message = AsyncMock()
 
     await view.dispute.callback(interaction)
