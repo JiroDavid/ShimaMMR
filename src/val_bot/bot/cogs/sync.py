@@ -6,7 +6,9 @@ from discord.ext import commands
 from discord.ext import tasks
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
-from val_bot.db.models import Player, PlayerPuuid, Match, MatchParticipant
+from val_bot.db.models import (
+    Player, PlayerPuuid, Match, MatchParticipant, AnnouncedUnresolvedMatch, IgnoredPuuid,
+)
 from val_bot.ingestion.base import NormalizedMatch
 from val_bot.db.match_service import create_pending_match
 from val_bot.ingestion.henrikdev import HenrikDevSource, PendingResolution
@@ -25,6 +27,10 @@ async def consented_players_for_sync(session) -> list[dict]:
     alts = await session.execute(select(PlayerPuuid.discord_id, PlayerPuuid.puuid, PlayerPuuid.region))
     players += [{"discord_id": d, "puuid": p, "region": r} for d, p, r in alts.all()]
     return players
+
+async def ignored_puuids_for_sync(session) -> set[str]:
+    result = await session.execute(select(IgnoredPuuid.puuid))
+    return set(result.scalars().all())
 
 DUPLICATE_WINDOW = timedelta(hours=12)
 
@@ -92,9 +98,32 @@ async def resolve_unknown_players(session, source, pending: PendingResolution, r
             existing_alt = await session.get(PlayerPuuid, puuid)
             if existing_alt is None:
                 session.add(PlayerPuuid(puuid=puuid, discord_id=discord_id, region=pending.region))
+
+    # anyone left blank on purpose (e.g. they've left the server) - record
+    # them so this same puuid stops tripping the unrecognized-player prompt
+    # on every future sync, for this match or any other
+    for unknown in pending.unknown_players:
+        if unknown.puuid in resolved:
+            continue
+        already_ignored = await session.get(IgnoredPuuid, unknown.puuid)
+        if already_ignored is None:
+            session.add(IgnoredPuuid(
+                puuid=unknown.puuid, name=unknown.name, tag=unknown.tag, region=pending.region,
+            ))
     await session.flush()
 
     normalized = source.build_match_with_resolutions(pending.raw_match, resolved)
+    if normalized.external_match_id is not None:
+        existing = await session.execute(
+            select(Match).where(Match.external_match_id == normalized.external_match_id)
+        )
+        existing_match = existing.scalar_one_or_none()
+        if existing_match is not None:
+            # this exact match was already created on a previous resolve
+            # (e.g. this prompt got re-announced before the ignore above
+            # took effect) - reuse it instead of hitting the unique
+            # constraint on external_match_id
+            return existing_match
     return await create_pending_match(session, normalized)
 
 async def _participant_discord_ids(session, match_id: int) -> list[str]:
@@ -149,14 +178,31 @@ async def reannounce_match_callback(send, session_factory, match_id: int):
         map_name = match.map
     await announce_ready_match(send, session_factory, match_id, map_name)
 
+async def _filter_unannounced(session, unresolved: list[PendingResolution]) -> list[PendingResolution]:
+    """Drops any PendingResolution whose match_id has already had its
+    'who is this?' prompt posted once, and records new ones as announced -
+    without this, an unresolved match gets re-detected and reannounced on
+    every single sync run/poll until someone acts on it."""
+    new_unresolved = []
+    for pending in unresolved:
+        external_id = pending.raw_match["metadata"]["match_id"]
+        already = await session.get(AnnouncedUnresolvedMatch, external_id)
+        if already is not None:
+            continue
+        session.add(AnnouncedUnresolvedMatch(external_match_id=external_id))
+        new_unresolved.append(pending)
+    return new_unresolved
+
 async def _sync_and_announce(session_factory, henrikdev_api_key, send):
     async with session_factory() as session:
         consented = await consented_players_for_sync(session)
+        ignored = await ignored_puuids_for_sync(session)
 
         def source_factory():
-            return HenrikDevSource(henrikdev_api_key, consented)
+            return HenrikDevSource(henrikdev_api_key, consented, ignored_puuids=ignored)
 
         created, unresolved = await sync_matches(session, source_factory)
+        unresolved = await _filter_unannounced(session, unresolved)
         await session.commit()
         created_info = [(m.id, m.map) for m in created]
 
@@ -203,14 +249,31 @@ class SyncCog(commands.Cog):
         async def send(content, view=None):
             await interaction.followup.send(content, view=view)
 
-        found = await _sync_and_announce(self.bot.session_factory, self.bot.henrikdev_api_key, send)
+        try:
+            found = await _sync_and_announce(self.bot.session_factory, self.bot.henrikdev_api_key, send)
+        except Exception:
+            logger.exception("Manual /sync-matches failed")
+            await interaction.followup.send(
+                "Sync failed (likely a HenrikDev API error) - check the bot logs. "
+                "Nothing was lost, safe to try again.",
+                ephemeral=True,
+            )
+            return
         if not found:
             await interaction.followup.send("No new matches found.", ephemeral=True)
 
     @commands.command(name="sync-matches")
     @commands.has_permissions(administrator=True)
     async def sync_matches_prefix(self, ctx: commands.Context):
-        found = await _sync_and_announce(self.bot.session_factory, self.bot.henrikdev_api_key, ctx.send)
+        try:
+            found = await _sync_and_announce(self.bot.session_factory, self.bot.henrikdev_api_key, ctx.send)
+        except Exception:
+            logger.exception("Manual v!sync-matches failed")
+            await ctx.send(
+                "Sync failed (likely a HenrikDev API error) - check the bot logs. "
+                "Nothing was lost, safe to try again."
+            )
+            return
         if not found:
             await ctx.send("No new matches found.")
 

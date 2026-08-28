@@ -1,14 +1,14 @@
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from discord import app_commands
 from discord.ext import commands
 from sqlalchemy import select
 from val_bot.bot.cogs.sync import (
     SyncCog, sync_matches, resolve_unknown_players, consented_players_for_sync,
-    reannounce_match_callback,
+    reannounce_match_callback, _sync_and_announce,
 )
-from val_bot.db.models import Player, PlayerPuuid, Match
+from val_bot.db.models import Player, PlayerPuuid, Match, IgnoredPuuid
 from val_bot.db.match_service import create_pending_match
 from val_bot.ingestion.base import NormalizedMatch, NormalizedParticipant
 from val_bot.ingestion.henrikdev import PendingResolution, UnknownPlayer, HenrikDevSource
@@ -125,6 +125,36 @@ async def test_sync_matches_does_not_dedup_different_roster(db_session):
     result = await db_session.execute(select(Match))
     assert len(result.scalars().all()) == 2
 
+async def test_sync_and_announce_only_announces_unresolved_match_once(db_session):
+    session_factory = MagicMock()
+    session_factory.return_value.__aenter__ = AsyncMock(return_value=db_session)
+    session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    pending = PendingResolution(
+        raw_match={"metadata": {"match_id": "unresolved-1"}}, map="Corrode",
+        played_at=datetime.now(timezone.utc), region="eu",
+        unknown_players=[UnknownPlayer(puuid="unk", name="gabbo", tag="2112")],
+    )
+
+    def fake_source(*args, **kwargs):
+        source = MagicMock()
+        source.fetch_new_matches = AsyncMock(return_value=[])
+        source.unresolved_matches = [pending]
+        return source
+
+    with patch("val_bot.bot.cogs.sync.HenrikDevSource", side_effect=fake_source):
+        send1 = AsyncMock()
+        found1 = await _sync_and_announce(session_factory, None, send1)
+        await db_session.commit()
+
+        send2 = AsyncMock()
+        found2 = await _sync_and_announce(session_factory, None, send2)
+
+    assert found1 is True
+    send1.assert_awaited()
+    assert found2 is False
+    send2.assert_not_awaited()
+
 async def test_sync_matches_surfaces_unresolved_matches(db_session):
     pending = PendingResolution(
         raw_match={}, map="Bind", played_at=datetime.now(timezone.utc), region="eu",
@@ -212,6 +242,71 @@ async def test_resolve_unknown_players_stores_alt_puuid_for_already_linked_playe
     alt = await db_session.get(PlayerPuuid, "alt-of-999")
     assert alt.discord_id == "999"
 
+async def test_resolve_unknown_players_ignores_a_puuid_left_blank(db_session):
+    db_session.add(Player(discord_id="1", consented=True, puuid="puuid-1", region="eu"))
+    await db_session.flush()
+
+    consented = [{"discord_id": "1", "puuid": "puuid-1", "region": "eu"}]
+    source = HenrikDevSource(api_key=None, consented_players=consented)
+    raw_match = {
+        "metadata": {"match_id": "m1", "map": {"name": "Bind"}, "started_at": "2026-08-24T20:33:00.591Z", "region": "eu"},
+        "players": [
+            {"puuid": "puuid-1", "team_id": "Red", "stats": {"kills": 1, "deaths": 1, "assists": 1, "score": 100}},
+            {"puuid": "ghost-puuid", "team_id": "Blue", "stats": {"kills": 1, "deaths": 1, "assists": 1, "score": 100}},
+        ],
+        "teams": [
+            {"team_id": "Red", "rounds": {"won": 13}},
+            {"team_id": "Blue", "rounds": {"won": 5}},
+        ],
+    }
+    pending = PendingResolution(
+        raw_match=raw_match, map="Bind", played_at=datetime.now(timezone.utc), region="eu",
+        unknown_players=[UnknownPlayer(puuid="ghost-puuid", name="gabbo", tag="2112")],
+    )
+
+    # "ghost-puuid" left blank (excluded from `resolved`) - should be
+    # recorded as ignored, not just dropped from this one match
+    await resolve_unknown_players(db_session, source, pending, resolved={})
+
+    ignored = await db_session.get(IgnoredPuuid, "ghost-puuid")
+    assert ignored is not None
+    assert ignored.name == "gabbo"
+    assert ignored.tag == "2112"
+
+async def test_resolve_unknown_players_reuses_existing_match_instead_of_crashing(db_session):
+    """If this same real match already has a Match row (e.g. resolved once
+    before, or re-announced due to a since-fixed bug), resolving it again
+    must not try to INSERT a second row with the same external_match_id."""
+    db_session.add(Player(discord_id="1", consented=True, puuid="puuid-1", region="eu"))
+    await db_session.flush()
+
+    consented = [{"discord_id": "1", "puuid": "puuid-1", "region": "eu"}]
+    source = HenrikDevSource(api_key=None, consented_players=consented)
+    raw_match = {
+        "metadata": {"match_id": "dupe-id", "map": {"name": "Corrode"}, "started_at": "2026-08-24T20:33:00.591Z", "region": "eu"},
+        "players": [
+            {"puuid": "puuid-1", "team_id": "Red", "stats": {"kills": 1, "deaths": 1, "assists": 1, "score": 100}},
+            {"puuid": "ghost-puuid", "team_id": "Blue", "stats": {"kills": 1, "deaths": 1, "assists": 1, "score": 100}},
+        ],
+        "teams": [
+            {"team_id": "Red", "rounds": {"won": 13}},
+            {"team_id": "Blue", "rounds": {"won": 5}},
+        ],
+    }
+    pending = PendingResolution(
+        raw_match=raw_match, map="Corrode", played_at=datetime.now(timezone.utc), region="eu",
+        unknown_players=[UnknownPlayer(puuid="ghost-puuid", name="gabbo", tag="2112")],
+    )
+
+    first = await resolve_unknown_players(db_session, source, pending, resolved={})
+    await db_session.commit()
+
+    second = await resolve_unknown_players(db_session, source, pending, resolved={})
+
+    assert second.id == first.id
+    result = await db_session.execute(select(Match).where(Match.external_match_id == "dupe-id"))
+    assert len(result.scalars().all()) == 1
+
 async def test_reannounce_match_posts_confirm_prompt_for_pending_match(db_session):
     for d in ("1", "2"):
         db_session.add(Player(discord_id=d, consented=True))
@@ -283,6 +378,43 @@ def test_reannounce_match_app_command_gates_on_administrator_permission():
     with pytest.raises(app_commands.MissingPermissions):
         predicate(SimpleNamespace(permissions=SimpleNamespace(administrator=False)))
     assert predicate(SimpleNamespace(permissions=SimpleNamespace(administrator=True))) is True
+
+async def test_sync_matches_cmd_reports_failure_instead_of_hanging():
+    bot = MagicMock()
+    bot.sync_announce_channel_id = None  # don't start the background poller
+    cog = SyncCog(bot)
+
+    interaction = MagicMock()
+    interaction.response.defer = AsyncMock()
+    interaction.followup.send = AsyncMock()
+
+    with patch(
+        "val_bot.bot.cogs.sync._sync_and_announce",
+        AsyncMock(side_effect=RuntimeError("boom")),
+    ):
+        await cog.sync_matches_cmd.callback(cog, interaction)
+
+    interaction.followup.send.assert_awaited_once()
+    message = interaction.followup.send.await_args.args[0]
+    assert "failed" in message.lower()
+
+async def test_sync_matches_prefix_reports_failure_instead_of_hanging():
+    bot = MagicMock()
+    bot.sync_announce_channel_id = None
+    cog = SyncCog(bot)
+
+    ctx = MagicMock()
+    ctx.send = AsyncMock()
+
+    with patch(
+        "val_bot.bot.cogs.sync._sync_and_announce",
+        AsyncMock(side_effect=RuntimeError("boom")),
+    ):
+        await cog.sync_matches_prefix.callback(cog, ctx)
+
+    ctx.send.assert_awaited_once()
+    message = ctx.send.await_args.args[0]
+    assert "failed" in message.lower()
 
 def test_sync_matches_app_command_gates_on_administrator_permission():
     predicate = SyncCog.sync_matches_cmd.checks[0]

@@ -34,6 +34,35 @@ class PlayerPuuid(Base):
     region: Mapped[str] = mapped_column(String)
 
 
+class IgnoredPuuid(Base):
+    """A Riot puuid a moderator explicitly left blank (chose not to link to
+    any Discord account) when resolving an unrecognized-player prompt -
+    typically someone who's left the server. Without this, the same puuid
+    keeps tripping the 'unrecognized player' prompt on every future sync
+    for any match they appear in, including ones already resolved."""
+    __tablename__ = "ignored_puuids"
+    puuid: Mapped[str] = mapped_column(String, primary_key=True)
+    name: Mapped[str] = mapped_column(String)
+    tag: Mapped[str] = mapped_column(String)
+    region: Mapped[str] = mapped_column(String)
+    ignored_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
+
+
+class AnnouncedUnresolvedMatch(Base):
+    """Marks a HenrikDev match_id whose 'who is this unrecognized player?'
+    prompt has already been posted once. Without this, a match that nobody
+    resolves (e.g. a player who's since left the server) gets re-detected
+    and re-announced on every single sync run/poll forever - this caps it
+    at one announcement per real match."""
+    __tablename__ = "announced_unresolved_matches"
+    external_match_id: Mapped[str] = mapped_column(String, primary_key=True)
+    announced_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
+
+
 class Match(Base):
     __tablename__ = "matches"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
