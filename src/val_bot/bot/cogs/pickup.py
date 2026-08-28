@@ -1,9 +1,12 @@
+import logging
 import discord
 from discord import app_commands
 from discord.ext import commands
 from val_bot.bot.views.pickup_views import (
     JOIN_EMOJI, PickupModal, PickupSession, StartPickupView, build_pickup_message,
 )
+
+logger = logging.getLogger(__name__)
 
 class PickupCog(commands.Cog):
     def __init__(self, bot):
@@ -15,7 +18,17 @@ class PickupCog(commands.Cog):
     def _build_on_built(self):
         async def on_built(message: discord.Message, region: str, time: str):
             self.sessions[message.id] = PickupSession(region=region, time=time)
-            await message.add_reaction(JOIN_EMOJI)
+            try:
+                await message.add_reaction(JOIN_EMOJI)
+            except discord.Forbidden:
+                # missing "Add Reactions" in this channel - the session still
+                # works, players can just react with anything themselves
+                # instead of clicking a pre-added one
+                logger.warning(
+                    "Missing Add Reactions permission in channel %s - pickup "
+                    "message posted without an auto-added reaction",
+                    message.channel.id,
+                )
         return on_built
 
     async def _refresh(self, channel_id: int, message_id: int):
@@ -43,7 +56,8 @@ class PickupCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
-        if payload.message_id not in self.sessions or str(payload.emoji) != JOIN_EMOJI:
+        # any emoji counts as joining - not just the auto-added JOIN_EMOJI
+        if payload.message_id not in self.sessions:
             return
         if self.bot.user is not None and payload.user_id == self.bot.user.id:
             return
@@ -52,7 +66,10 @@ class PickupCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_raw_reaction_remove(self, payload: discord.RawReactionActionEvent):
-        if payload.message_id not in self.sessions or str(payload.emoji) != JOIN_EMOJI:
+        # removing any one reaction leaves the queue, even if the user still
+        # has a different emoji reaction on the message - keeps this simple
+        # rather than tracking per-emoji counts per user
+        if payload.message_id not in self.sessions:
             return
         self.sessions[payload.message_id].leave(str(payload.user_id))
         await self._refresh(payload.channel_id, payload.message_id)

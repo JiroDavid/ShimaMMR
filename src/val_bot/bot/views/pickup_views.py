@@ -39,7 +39,7 @@ def build_pickup_message(
     return (
         f"🎯 Pickup game — **{region}**\n\n"
         f"🕒 {time}\n\n"
-        f"React to join {JOIN_EMOJI}\n"
+        f"React with anything to join (or click {JOIN_EMOJI} below)\n"
         f"(first {CONFIRMED_CAPACITY} are Confirmed, the rest go to the Waitlist)\n\n"
         f"**Confirmed ({len(confirmed_ids)}/{CONFIRMED_CAPACITY}):**\n{confirmed_lines}\n\n"
         f"**Waitlist:**\n{waitlist_lines}\n\n"
