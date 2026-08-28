@@ -1,8 +1,11 @@
 import asyncio
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import httpx
 from val_bot.ingestion.base import MatchDataSource, NormalizedMatch, NormalizedParticipant
+
+logger = logging.getLogger(__name__)
 
 BASE_URL = "https://api.henrikdev.xyz/valorant"
 MATCH_HISTORY_PAGE_SIZE = 10
@@ -40,10 +43,17 @@ class PendingResolution:
     unknown_players: list[UnknownPlayer]
 
 class HenrikDevSource(MatchDataSource):
-    def __init__(self, api_key: str | None, consented_players: list[dict]):
+    def __init__(
+        self, api_key: str | None, consented_players: list[dict],
+        ignored_puuids: set[str] | None = None,
+    ):
         self.api_key = api_key
         self.consented_players = consented_players
         self._puuid_to_discord_id = {p["puuid"]: p["discord_id"] for p in consented_players}
+        # puuids a moderator already chose not to link to anyone - treated
+        # like "known" for classification purposes (never re-prompted) but
+        # still dropped from participants, same as any other unlinked puuid
+        self._ignored_puuids = set(ignored_puuids or ())
         self._request_interval = REQUEST_INTERVAL_SECONDS
         self.unresolved_matches: list[PendingResolution] = []
 
@@ -120,7 +130,10 @@ class HenrikDevSource(MatchDataSource):
         if "Red" not in teams or "Blue" not in teams:
             return None, None
 
-        unknown = [p for p in players if p["puuid"] not in self._puuid_to_discord_id]
+        unknown = [
+            p for p in players
+            if p["puuid"] not in self._puuid_to_discord_id and p["puuid"] not in self._ignored_puuids
+        ]
         if unknown:
             pending = PendingResolution(
                 raw_match=match,
@@ -141,7 +154,29 @@ class HenrikDevSource(MatchDataSource):
             for index, player in enumerate(self.consented_players):
                 if index > 0:
                     await asyncio.sleep(self._request_interval)
-                matches = await self._matches_for_player(client, player["puuid"], player["region"])
+                try:
+                    matches = await self._matches_for_player(client, player["puuid"], player["region"])
+                except httpx.HTTPStatusError as exc:
+                    if exc.response.status_code == 429:
+                        # still rate-limited after the one retry in
+                        # _get_with_backoff - skip this player rather than
+                        # aborting the whole sync; they'll get picked up on
+                        # the next run instead of losing everyone else's
+                        # progress too
+                        logger.warning(
+                            "Still rate-limited fetching matches for puuid %s - "
+                            "skipping for this sync run", player["puuid"],
+                        )
+                        continue
+                    raise
+                except httpx.TimeoutException:
+                    # API didn't respond at all (as opposed to a 429) -
+                    # same treatment: skip this player, keep the sync going
+                    logger.warning(
+                        "Timed out fetching matches for puuid %s - "
+                        "skipping for this sync run", player["puuid"],
+                    )
+                    continue
                 for match in matches:
                     external_id = match["metadata"]["match_id"]
                     if external_id in results or external_id in seen_pending:

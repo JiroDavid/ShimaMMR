@@ -41,8 +41,8 @@ def _mock_matchlist(puuid: str, matches: list[dict]):
         return_value=httpx.Response(200, json={"data": matches})
     )
 
-def _source(consented_players=CONSENTED) -> HenrikDevSource:
-    source = HenrikDevSource(api_key=None, consented_players=consented_players)
+def _source(consented_players=CONSENTED, ignored_puuids=None) -> HenrikDevSource:
+    source = HenrikDevSource(api_key=None, consented_players=consented_players, ignored_puuids=ignored_puuids)
     source._request_interval = 0  # no need to actually throttle in tests
     return source
 
@@ -125,6 +125,58 @@ async def test_fetch_new_matches_retries_after_429():
 
     assert len(matches) == 1
     assert route.call_count == 2
+
+@respx.mock
+async def test_fetch_new_matches_skips_player_on_timeout():
+    # API doesn't respond at all (no status code, unlike a 429) - should be
+    # skipped rather than aborting the whole sync
+    respx.get(url__regex=r".*/by-puuid/matches/eu/pc/puuid-1.*").mock(
+        side_effect=httpx.ReadTimeout("timed out")
+    )
+    _mock_matchlist("puuid-2", [_match()])
+    _mock_matchlist("puuid-3", [])
+
+    source = _source()
+    matches = await source.fetch_new_matches()
+
+    assert len(matches) == 1
+
+@respx.mock
+async def test_fetch_new_matches_skips_player_still_rate_limited_after_retry():
+    # puuid-1 stays 429 even after the one built-in retry - should be
+    # skipped rather than aborting the whole sync and losing puuid-2/3
+    respx.get(url__regex=r".*/by-puuid/matches/eu/pc/puuid-1.*").mock(
+        return_value=httpx.Response(429, headers={"Retry-After": "0"}, json={"errors": [{"message": "rate limited"}]})
+    )
+    _mock_matchlist("puuid-2", [_match()])
+    _mock_matchlist("puuid-3", [])
+
+    source = _source()
+    matches = await source.fetch_new_matches()
+
+    assert len(matches) == 1
+
+@respx.mock
+async def test_fetch_new_matches_treats_ignored_puuid_as_known_and_drops_them():
+    # a puuid a moderator already left blank once shouldn't trip the
+    # unrecognized-player prompt again - just silently excluded like any
+    # other unlinked puuid, and the match resolves normally
+    ignored_player = {
+        "puuid": "ignored-1", "name": "ghost", "tag": "000", "team_id": "Blue",
+        "stats": {"kills": 1, "deaths": 1, "assists": 1, "score": 50},
+    }
+    match = _match(extra_players=[ignored_player])
+    _mock_matchlist("puuid-1", [match])
+    _mock_matchlist("puuid-2", [])
+    _mock_matchlist("puuid-3", [])
+
+    source = _source(ignored_puuids={"ignored-1"})
+    matches = await source.fetch_new_matches()
+
+    assert len(matches) == 1
+    assert source.unresolved_matches == []
+    assert len(matches[0].participants) == 3
+    assert all(p.discord_id != "ignored-1" for p in matches[0].participants)
 
 @respx.mock
 async def test_fetch_new_matches_surfaces_unknown_players_instead_of_dropping_them():
