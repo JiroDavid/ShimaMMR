@@ -1,10 +1,18 @@
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 import discord
 from val_bot.bot.cogs.pickup import PickupCog
 from val_bot.bot.views.pickup_views import (
     CONFIRMED_CAPACITY, JOIN_EMOJI, PickupModal, PickupSession,
-    StartPickupView, build_pickup_message,
+    StartPickupView, build_pickup_message, parse_pickup_message,
 )
+
+def test_parse_pickup_message_extracts_region_and_time():
+    content = build_pickup_message("EU", "Tonight 7:30pm BST", ["1"], [])
+    assert parse_pickup_message(content) == ("EU", "Tonight 7:30pm BST")
+
+def test_parse_pickup_message_rejects_unrelated_content():
+    assert parse_pickup_message("just some random message") is None
 
 def test_build_pickup_message_shows_placeholders_when_empty():
     content = build_pickup_message("EU", "Tonight 7:30pm BST", [], [])
@@ -105,6 +113,7 @@ async def test_reaction_add_joins_and_refreshes_message():
 
     message = MagicMock()
     message.edit = AsyncMock()
+    message.remove_reaction = AsyncMock()
     channel = MagicMock()
     channel.fetch_message = AsyncMock(return_value=message)
     cog.bot.get_channel = MagicMock(return_value=channel)
@@ -115,7 +124,24 @@ async def test_reaction_add_joins_and_refreshes_message():
     message.edit.assert_awaited_once()
     assert "<@99>" in message.edit.await_args.kwargs["content"]
 
-async def test_reaction_add_ignores_bots_own_reaction():
+async def test_reaction_add_removes_bot_reaction_after_first_real_join():
+    cog = PickupCog(bot=MagicMock())
+    cog.bot.user.id = 12345
+    cog.sessions[1] = PickupSession(region="EU", time="7:30pm")
+
+    message = MagicMock()
+    message.edit = AsyncMock()
+    message.remove_reaction = AsyncMock()
+    channel = MagicMock()
+    channel.fetch_message = AsyncMock(return_value=message)
+    cog.bot.get_channel = MagicMock(return_value=channel)
+
+    await cog.on_raw_reaction_add(_payload(user_id=99))
+    await cog.on_raw_reaction_add(_payload(user_id=100))
+
+    message.remove_reaction.assert_awaited_once_with(JOIN_EMOJI, cog.bot.user)
+
+async def test_reaction_add_ignores_bots_own_reaction_on_tracked_session():
     cog = PickupCog(bot=MagicMock())
     cog.bot.user.id = 12345
     cog.sessions[1] = PickupSession(region="EU", time="7:30pm")
@@ -133,6 +159,7 @@ async def test_reaction_add_accepts_any_emoji():
 
     message = MagicMock()
     message.edit = AsyncMock()
+    message.remove_reaction = AsyncMock()
     channel = MagicMock()
     channel.fetch_message = AsyncMock(return_value=message)
     cog.bot.get_channel = MagicMock(return_value=channel)
@@ -158,11 +185,65 @@ async def test_reaction_remove_leaves_and_refreshes_message():
     assert cog.sessions[1].order == []
     message.edit.assert_awaited_once()
 
-async def test_reaction_events_ignore_untracked_message():
+async def test_reaction_events_ignore_message_bot_cannot_recover():
     cog = PickupCog(bot=MagicMock())
-    cog.bot.get_channel = MagicMock()
+    cog.bot.user.id = 12345
+    response = MagicMock(status=404, reason="Not Found")
+    channel = MagicMock()
+    channel.fetch_message = AsyncMock(side_effect=discord.NotFound(response, "Unknown Message"))
+    cog.bot.get_channel = MagicMock(return_value=channel)
 
     await cog.on_raw_reaction_add(_payload(message_id=999))
     await cog.on_raw_reaction_remove(_payload(message_id=999))
 
-    cog.bot.get_channel.assert_not_called()
+    assert 999 not in cog.sessions
+
+def _fake_reaction(user_ids):
+    reaction = MagicMock()
+    async def _users():
+        for uid in user_ids:
+            yield SimpleNamespace(id=uid)
+    reaction.users = MagicMock(return_value=_users())
+    return reaction
+
+async def test_reaction_add_recovers_lost_session_from_message_and_live_reactions():
+    """Simulates a bot restart wiping self.sessions mid-signup: the message
+    still exists with its real content and reactions, so the next reaction
+    event should rebuild the session instead of silently dropping it."""
+    cog = PickupCog(bot=MagicMock())
+    cog.bot.user.id = 12345
+
+    content = build_pickup_message("EU", "7:30pm BST", [], [])
+    message = MagicMock()
+    message.id = 1
+    message.author.id = 12345
+    message.content = content
+    message.edit = AsyncMock()
+    message.remove_reaction = AsyncMock()
+    message.reactions = [_fake_reaction([99, 100, 12345])]  # bot's own reaction mixed in
+
+    channel = MagicMock()
+    channel.fetch_message = AsyncMock(return_value=message)
+    cog.bot.get_channel = MagicMock(return_value=channel)
+
+    await cog.on_raw_reaction_add(_payload(message_id=1, user_id=99))
+
+    assert cog.sessions[1].region == "EU"
+    assert cog.sessions[1].order == ["99", "100"]  # bot's own reaction excluded
+    message.edit.assert_awaited_once()
+
+async def test_reaction_add_recovery_ignores_messages_not_authored_by_the_bot():
+    cog = PickupCog(bot=MagicMock())
+    cog.bot.user.id = 12345
+
+    message = MagicMock()
+    message.author.id = 999999  # someone else's message
+    message.content = build_pickup_message("EU", "7:30pm BST", [], [])
+
+    channel = MagicMock()
+    channel.fetch_message = AsyncMock(return_value=message)
+    cog.bot.get_channel = MagicMock(return_value=channel)
+
+    await cog.on_raw_reaction_add(_payload(message_id=1, user_id=99))
+
+    assert 1 not in cog.sessions

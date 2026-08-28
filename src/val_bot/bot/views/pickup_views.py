@@ -1,8 +1,22 @@
 from dataclasses import dataclass, field
+import re
 import discord
 
 JOIN_EMOJI = "‼️"
 CONFIRMED_CAPACITY = 10
+
+_MESSAGE_PATTERN = re.compile(r"^🎯 Pickup game — \*\*(.+?)\*\*\n\n🕒 (.+?)\n\n")
+
+
+def parse_pickup_message(content: str) -> tuple[str, str] | None:
+    """Pulls (region, time) back out of a message built by
+    build_pickup_message - used to rebuild a PickupSession that's been lost
+    (e.g. a bot restart) from the message's own text plus its live reactions,
+    rather than silently ignoring further reactions on it forever."""
+    match = _MESSAGE_PATTERN.match(content)
+    if match is None:
+        return None
+    return match.group(1), match.group(2)
 
 
 @dataclass
@@ -15,6 +29,7 @@ class PickupSession:
     region: str
     time: str
     order: list[str] = field(default_factory=list)
+    bot_reaction_removed: bool = False
 
     def join(self, discord_id: str) -> None:
         if discord_id not in self.order:
