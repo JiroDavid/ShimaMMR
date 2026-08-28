@@ -1,12 +1,34 @@
-# Val Pick Ups Bot
+<div align="center">
+  <img src="assets/logo.svg" width="160" height="160" alt="ShimaMMR"/>
+
+  <h1>ShimaMMR</h1>
+
+  <p>A Discord bot that turns manually-tallied Valorant pickups into a real MMR-tracked leaderboard</p>
+
+  [![Python](https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
+  [![discord.py](https://img.shields.io/badge/discord.py-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discordpy.readthedocs.io)
+  [![SQLAlchemy](https://img.shields.io/badge/SQLAlchemy-D71F00?style=for-the-badge&logo=sqlalchemy&logoColor=white)](https://www.sqlalchemy.org)
+  [![SQLite](https://img.shields.io/badge/SQLite-003B57?style=for-the-badge&logo=sqlite&logoColor=white)](https://sqlite.org)
+  [![Docker](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://www.docker.com)
+  [![HenrikDev API](https://img.shields.io/badge/HenrikDev%20API-FF4655?style=for-the-badge&logo=riotgames&logoColor=white)](https://docs.henrikdev.xyz)
+
+</div>
+
+---
+
+Elo-based MMR for 10-man Valorant pickup customs, with a performance-adjusted
+K-factor, rank tiers, and a real leaderboard. Matches can be reported
+manually or auto-detected from the real Valorant API — either way, nothing
+touches MMR until a participant (or admin) confirms it.
 
 ## Setup (either machine — WSL dev or the Windows laptop running Docker Desktop)
 
-1. Copy `.env.example` to `.env` and fill in `DISCORD_TOKEN` (from
-   https://discord.com/developers/applications), `HENRIKDEV_API_KEY` (a free
-   "Basic" key from https://api.henrikdev.xyz/dashboard/ — required, the API
-   now 401s without one), and `SYNC_ANNOUNCE_CHANNEL_ID` (the channel the
-   background match-sync poller posts new-match confirmations to).
+1. Copy `.env.example` to `.env` and fill in:
+   - `DISCORD_TOKEN` — from https://discord.com/developers/applications
+   - `HENRIKDEV_API_KEY` — a free "Basic" key from
+     https://api.henrikdev.xyz/dashboard/ (required — the API 401s without one)
+   - `SYNC_ANNOUNCE_CHANNEL_ID` — the channel ID the background match-sync
+     poller posts new-match confirmations to
 2. `docker compose up --build`
 
 That's the entire deployment step on both machines — build once on WSL to
@@ -14,6 +36,36 @@ develop, then `docker compose up --build` again on the Windows laptop with
 Docker Desktop (WSL2 backend) to run it for real. `bot.db` is bind-mounted
 into the container (not a Docker-managed volume), so it's the exact same
 file that's tracked in this git repo.
+
+### Windows laptop setup (full walkthrough)
+
+1. Install [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+   and make sure the **WSL2 backend** is enabled (Settings → General → "Use
+   the WSL 2 based engine"). Docker Desktop will prompt to install WSL2 on
+   first run if it isn't already there.
+2. Install [Git for Windows](https://git-scm.com/downloads/win) (or use Git
+   inside a WSL2 distro if you'd rather run everything from there).
+3. Clone the repo:
+   ```bash
+   git clone git@github.com:JiroDavid/ShimaMMR.git
+   cd ShimaMMR
+   ```
+4. Copy `.env.example` to `.env` and fill in the same three values as above
+   (`DISCORD_TOKEN`, `HENRIKDEV_API_KEY`, `SYNC_ANNOUNCE_CHANNEL_ID`) — `.env`
+   is gitignored, so this step is per-machine, not something `git pull` gives you.
+5. `docker compose up --build` — this builds the image and starts the bot,
+   reading/writing straight from the `bot.db` that came down with `git clone`.
+6. Leave the container running (`docker compose up -d --build` to run it
+   detached in the background instead of holding the terminal open). It'll
+   restart automatically on reboot per `docker-compose.yml`'s
+   `restart: unless-stopped`.
+
+From then on, updating the laptop to the latest code/data is just:
+```bash
+docker compose down
+git pull
+docker compose up --build
+```
 
 ### Moving between machines
 
@@ -48,6 +100,9 @@ pytest -v
 ```
 
 ## Commands
+
+Every command below works as both a slash command (`/whatever`) and a
+`v!whatever` text command.
 
 - `/link <riot_username> <riot_tag>` — link your Discord account to your Riot ID.
   Resolves your account against Riot's servers to enable automatic match
