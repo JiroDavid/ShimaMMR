@@ -35,6 +35,11 @@ class UnknownPlayerResolutionView(discord.ui.View):
     async def finalize(self, interaction: discord.Interaction, button: discord.ui.Button):
         from val_bot.bot.cogs.sync import resolve_unknown_players
 
+        # must ack within Discord's 3-second component-interaction window -
+        # on_finalized posts its result via interaction.followup, which is
+        # only valid once the interaction has been responded to
+        await interaction.response.defer()
+
         resolved = {puuid: discord_id for puuid, discord_id in self._selections.items() if discord_id}
         async with self.session_factory() as session:
             match = await resolve_unknown_players(session, self.source_factory(), self.pending, resolved)

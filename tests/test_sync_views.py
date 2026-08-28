@@ -51,8 +51,10 @@ async def test_finalize_resolves_selection_and_creates_match(db_session):
     view._selections["unk-puuid"] = "999"
 
     interaction = MagicMock()
+    interaction.response.defer = AsyncMock()
     await view.finalize.callback(interaction)
 
+    interaction.response.defer.assert_awaited_once()
     new_player = await db_session.get(Player, "999")
     assert new_player is not None
     assert new_player.puuid == "unk-puuid"
@@ -75,6 +77,7 @@ async def test_finalize_excludes_players_left_unselected(db_session):
     # left the unknown player's select empty - they should just be excluded
 
     interaction = MagicMock()
+    interaction.response.defer = AsyncMock()
     await view.finalize.callback(interaction)
 
     from val_bot.db.models import Match
