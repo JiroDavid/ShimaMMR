@@ -1,11 +1,12 @@
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 import pytest
 from discord import app_commands
 from discord.ext import commands
 from sqlalchemy import select
 from val_bot.bot.cogs.sync import (
     SyncCog, sync_matches, resolve_unknown_players, consented_players_for_sync,
+    reannounce_match_callback,
 )
 from val_bot.db.models import Player, PlayerPuuid, Match
 from val_bot.db.match_service import create_pending_match
@@ -210,6 +211,78 @@ async def test_resolve_unknown_players_stores_alt_puuid_for_already_linked_playe
     assert player_999.puuid == "puuid-999-main"  # primary untouched
     alt = await db_session.get(PlayerPuuid, "alt-of-999")
     assert alt.discord_id == "999"
+
+async def test_reannounce_match_posts_confirm_prompt_for_pending_match(db_session):
+    for d in ("1", "2"):
+        db_session.add(Player(discord_id=d, consented=True))
+    await db_session.flush()
+    normalized = NormalizedMatch(
+        played_at=datetime.now(timezone.utc), map="Bind", source="henrikdev",
+        team_a_score=13, team_b_score=6, reported_by_discord_id="auto",
+        participants=[
+            NormalizedParticipant(discord_id="1", team="A"),
+            NormalizedParticipant(discord_id="2", team="B"),
+        ],
+    )
+    match = await create_pending_match(db_session, normalized)
+    await db_session.commit()
+
+    session_factory = MagicMock()
+    session_factory.return_value.__aenter__ = AsyncMock(return_value=db_session)
+    session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+    send = AsyncMock()
+
+    await reannounce_match_callback(send, session_factory, match.id)
+
+    send.assert_awaited_once()
+    content, kwargs = send.await_args.args[0], send.await_args.kwargs
+    assert f"match #{match.id}" in content
+    assert "Bind" in content
+    assert kwargs["view"] is not None
+
+async def test_reannounce_match_reports_missing_match():
+    session_factory = MagicMock()
+    session_factory.return_value.__aenter__ = AsyncMock(return_value=MagicMock(
+        get=AsyncMock(return_value=None),
+    ))
+    session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+    send = AsyncMock()
+
+    await reannounce_match_callback(send, session_factory, 999)
+
+    send.assert_awaited_once_with("No match #999 found.")
+
+async def test_reannounce_match_refuses_non_pending_match(db_session):
+    for d in ("1", "2"):
+        db_session.add(Player(discord_id=d, consented=True))
+    await db_session.flush()
+    normalized = NormalizedMatch(
+        played_at=datetime.now(timezone.utc), map="Bind", source="henrikdev",
+        team_a_score=13, team_b_score=6, reported_by_discord_id="auto",
+        participants=[
+            NormalizedParticipant(discord_id="1", team="A"),
+            NormalizedParticipant(discord_id="2", team="B"),
+        ],
+    )
+    match = await create_pending_match(db_session, normalized)
+    match.status = "voided"
+    await db_session.commit()
+
+    session_factory = MagicMock()
+    session_factory.return_value.__aenter__ = AsyncMock(return_value=db_session)
+    session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+    send = AsyncMock()
+
+    await reannounce_match_callback(send, session_factory, match.id)
+
+    send.assert_awaited_once_with(f"Match #{match.id} is already voided - nothing to re-announce.")
+
+def test_reannounce_match_app_command_gates_on_administrator_permission():
+    predicate = SyncCog.reannounce_match_cmd.checks[0]
+
+    with pytest.raises(app_commands.MissingPermissions):
+        predicate(SimpleNamespace(permissions=SimpleNamespace(administrator=False)))
+    assert predicate(SimpleNamespace(permissions=SimpleNamespace(administrator=True))) is True
 
 def test_sync_matches_app_command_gates_on_administrator_permission():
     predicate = SyncCog.sync_matches_cmd.checks[0]

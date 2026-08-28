@@ -45,6 +45,22 @@ async def test_confirm_match_applies_ratings(db_session):
     assert winner_row.mmr_before == 700
     assert winner_row.mmr_after == p1.mmr
 
+async def test_confirm_match_is_a_no_op_if_already_confirmed(db_session):
+    for d in ("p1", "p2", "p3", "p4"):
+        db_session.add(Player(discord_id=d))
+    await db_session.flush()
+
+    match = await create_pending_match(db_session, _normalized_match())
+    await confirm_match(db_session, match.id)
+    p1_after_first = (await db_session.get(Player, "p1")).mmr
+
+    confirmed_again = await confirm_match(db_session, match.id)
+
+    p1 = await db_session.get(Player, "p1")
+    assert p1.mmr == p1_after_first  # not double-applied
+    assert p1.games_played == 1
+    assert confirmed_again.status == "confirmed"
+
 async def test_confirm_match_works_from_a_fresh_session():
     # Mirrors production: /report-match creates the match in one interaction's
     # session, then a *different* interaction's session confirms it later -

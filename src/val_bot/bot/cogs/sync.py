@@ -133,6 +133,22 @@ async def announce_unresolved_match(send, session_factory, source_factory, pendi
         view=view,
     )
 
+async def reannounce_match_callback(send, session_factory, match_id: int):
+    """Re-post the confirm/dispute prompt for a match that's already pending
+    in the DB but has no live announcement anyone can act on - e.g. the
+    original announce_ready_match call failed (expired interaction token,
+    transient API error) after the match itself was already committed."""
+    async with session_factory() as session:
+        match = await session.get(Match, match_id)
+        if match is None:
+            await send(f"No match #{match_id} found.")
+            return
+        if match.status != "pending":
+            await send(f"Match #{match_id} is already {match.status} - nothing to re-announce.")
+            return
+        map_name = match.map
+    await announce_ready_match(send, session_factory, match_id, map_name)
+
 async def _sync_and_announce(session_factory, henrikdev_api_key, send):
     async with session_factory() as session:
         consented = await consented_players_for_sync(session)
@@ -197,6 +213,24 @@ class SyncCog(commands.Cog):
         found = await _sync_and_announce(self.bot.session_factory, self.bot.henrikdev_api_key, ctx.send)
         if not found:
             await ctx.send("No new matches found.")
+
+    @app_commands.command(
+        name="reannounce-match",
+        description="Re-post the confirm/dispute prompt for a pending match (Admin only)",
+    )
+    @app_commands.checks.has_permissions(administrator=True)
+    async def reannounce_match_cmd(self, interaction: discord.Interaction, match_id: int):
+        await interaction.response.defer()
+
+        async def send(content, view=None):
+            await interaction.followup.send(content, view=view)
+
+        await reannounce_match_callback(send, self.bot.session_factory, match_id)
+
+    @commands.command(name="reannounce-match")
+    @commands.has_permissions(administrator=True)
+    async def reannounce_match_prefix(self, ctx: commands.Context, match_id: int):
+        await reannounce_match_callback(ctx.send, self.bot.session_factory, match_id)
 
 async def setup(bot):
     await bot.add_cog(SyncCog(bot))

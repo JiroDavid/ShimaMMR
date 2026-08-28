@@ -57,6 +57,11 @@ async def _seed_state(session: AsyncSession, discord_ids: set[str]):
 
 async def confirm_match(session: AsyncSession, match_id: int) -> Match:
     match = await _get_match_with_participants(session, match_id)
+    if match.status != "pending":
+        # already confirmed (e.g. a stale duplicate confirm/dispute prompt
+        # got clicked after the match was already resolved elsewhere) -
+        # applying MMR a second time would double-count it, so no-op
+        return match
     discord_ids = {p.discord_id for p in match.participants}
     current_mmr, games_played, loss_streak = await _seed_state(session, discord_ids)
 
