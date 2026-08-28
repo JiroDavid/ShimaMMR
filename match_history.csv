@@ -89,3 +89,33 @@ match_9,2026-08-24,Haven,Team B,Loss (5-13),@bearably,Bear,,Diamond I,267,16,16,
 match_9,2026-08-24,Haven,Team B,Loss (5-13),@szbread_19,BreadnCheese,,Diamond I,129,7,16,5,0.4,,-58,88.6,11,67,1,1,0,,,
 match_9,2026-08-24,Haven,Team B,Loss (5-13),@nope_yep_,benzinooo,,Diamond I,129,6,17,7,0.3,,-85,91.1,19,44,1,3,0,,,
 match_9,2026-08-24,Haven,Team B,Loss (5-13),@randmeow,blossom,,Diamond I,105,7,15,2,0.5,,-66,73.9,18,44,1,1,0,,,
+match_10,2026-08-23,Ascent,Team1,Win (88-79 kills / 13-10 rounds),@luvnochi,snomnom,Reyna,,274,22,13,8,,77,,,,,1,,,1,0,screenshot taker (highlighted row)
+match_10,2026-08-23,Ascent,Team2,Loss (79-88 kills / 10-13 rounds),@tia0_o,redtea,Miks,,269,21,18,7,,68,,,,,4,,,0,0,agent name as shown - please confirm actual agent
+match_10,2026-08-23,Ascent,Team1,Win (88-79 kills / 13-10 rounds),@paxeee,baobao,Clove,,260,25,16,7,,66,,,,,3,,,0,0,
+match_10,2026-08-23,Ascent,Team2,Loss (79-88 kills / 10-13 rounds),@vixnvlr,john bigback (SILLY tag),Jett,,252,20,17,2,,68,,,,,5,,,0,2,
+match_10,2026-08-23,Ascent,Team2,Loss (79-88 kills / 10-13 rounds),@skullmanjack.,skullmanjack,Neon,,212,16,18,5,,64,,,,,0,,,0,1,
+match_10,2026-08-23,Ascent,Team2,Loss (79-88 kills / 10-13 rounds),@awde,Awde,Sova,,208,15,18,8,,54,,,,,1,,,1,0,
+match_10,2026-08-23,Ascent,Team1,Win (88-79 kills / 13-10 rounds),@travztmr,Travz,Phoenix,,201,15,16,9,,53,,,,,3,,,0,0,
+match_10,2026-08-23,Ascent,Team1,Win (88-79 kills / 13-10 rounds),@bearably,Bear,Waylay,,178,13,16,11,,48,,,,,3,,,2,0,
+match_10,2026-08-23,Ascent,Team1,Win (88-79 kills / 13-10 rounds),@uvz,buubz,Neon,,163,13,18,5,,37,,,,,2,,,3,0,
+match_10,2026-08-23,Ascent,Team2,Loss (79-88 kills / 10-13 rounds),@szbread_19,BreadnCheese,Killjoy,,114,7,17,2,,34,,,,,1,,,2,0,
+match_11,2026 (exact date cut off in screenshot - confirm),Pearl (map name cut off in screenshot - confirm),Team1,Win (81-61 kills / 13-6 rounds),@vixnvlr,john bigback (SILLY tag),Chamber,,269,19,11,3,,90,,,,,5,,,0,0,
+match_11,2026 (exact date cut off in screenshot - confirm),Pearl (map name cut off in screenshot - confirm),Team1,Win (81-61 kills / 13-6 rounds),@luvnochi,snomnom,Miks,,258,17,15,11,,60,,,,,4,,,0,0,screenshot taker (highlighted row); agent name as shown - please confirm actual agent
+match_11,2026 (exact date cut off in screenshot - confirm),Pearl (map name cut off in screenshot - confirm),Team2,Loss (61-81 kills / 6-13 rounds),,keep virginity,Viper,,256,15,14,7,,98,,,,,2,,,0,0,discord handle not yet confirmed - using in-game name as placeholder
+match_11,2026 (exact date cut off in screenshot - confirm),Pearl (map name cut off in screenshot - confirm),Team1,Win (81-61 kills / 13-6 rounds),@paxeee,baobao,Waylay,,241,16,8,5,,103,,,,,2,,,0,0,
+match_11,2026 (exact date cut off in screenshot - confirm),Pearl (map name cut off in screenshot - confirm),Team2,Loss (61-81 kills / 6-13 rounds),@skullmanjack.,skullmanjack,Clove,,240,15,19,4,,69,,,,,3,,,1,0,
+match_11,2026 (exact date cut off in screenshot - confirm),Pearl (map name cut off in screenshot - confirm),Team1,Win (81-61 kills / 13-6 rounds),@travztmr,Travz,Yoru,,224,15,13,4,,48,,,,,1,,,3,0,
+match_11,2026 (exact date cut off in screenshot - confirm),Pearl (map name cut off in screenshot - confirm),Team1,Win (81-61 kills / 13-6 rounds),@bearably,Bear,Kay/O,,205,14,14,9,,55,,,,,1,,,7,0,
+match_11,2026 (exact date cut off in screenshot - confirm),Pearl (map name cut off in screenshot - confirm),Team2,Loss (61-81 kills / 6-13 rounds),@uvz,buubz,Miks,,203,13,16,4,,53,,,,,1,,,1,0,agent name as shown - please confirm actual agent
+match_11,2026 (exact date cut off in screenshot - confirm),Pearl (map name cut off in screenshot - confirm),Team2,Loss (61-81 kills / 6-13 rounds),@4atomsk,Roxas,Brimstone,,190,11,15,10,,56,,,,,0,,,0,1,
+match_11,2026 (exact date cut off in screenshot - confirm),Pearl (map name cut off in screenshot - confirm),Team2,Loss (61-81 kills / 6-13 rounds),@tia0_o,redtea,Omen,,109,7,17,2,,35,,,,,0,,,1,0,
+match_12,2026-08-26,Bind,Team1,Win (89-76 kills / 13-10 rounds),@wordsbynoble,peble eater,Cypher,,272,23,13,4,,53,,,,,3,,,0,0,
+match_12,2026-08-26,Bind,Team1,Win (89-76 kills / 13-10 rounds),,keep virginity,Chamber,,271,23,15,1,,76,,,,,4,,,3,0,discord handle not yet confirmed - using in-game name as placeholder
+match_12,2026-08-26,Bind,Team2,Loss (76-89 kills / 10-13 rounds),@travztmr,Travz,Chamber,,227,19,17,1,,51,,,,,3,,,0,0,
+match_12,2026-08-26,Bind,Team1,Win (89-76 kills / 13-10 rounds),@luvnochi,snomnom,Clove,,219,15,20,10,,70,,,,,1,,,0,1,screenshot taker (highlighted row)
+match_12,2026-08-26,Bind,Team2,Loss (76-89 kills / 10-13 rounds),@uvz,buubz,Raze,,214,16,19,5,,46,,,,,2,,,0,0,
+match_12,2026-08-26,Bind,Team2,Loss (76-89 kills / 10-13 rounds),@Jiroshima,Jiroshima,Tejo,,213,18,17,6,,62,,,,,5,,,3,0,
+match_12,2026-08-26,Bind,Team1,Win (89-76 kills / 13-10 rounds),@szbread_19,BreadnCheese,Vyse,,186,15,16,5,,47,,,,,4,,,2,0,
+match_12,2026-08-26,Bind,Team2,Loss (76-89 kills / 10-13 rounds),@enx0o,nzo,Omen,,175,14,17,2,,47,,,,,1,,,3,1,
+match_12,2026-08-26,Bind,Team2,Loss (76-89 kills / 10-13 rounds),@tia0_o,redtea,Fade,,135,9,19,9,,40,,,,,0,,,3,0,
+match_12,2026-08-26,Bind,Team1,Win (89-76 kills / 13-10 rounds),@streethunter,Mystrophics,Deadlock,,121,13,13,3,,57,,,,,0,,,5,1,

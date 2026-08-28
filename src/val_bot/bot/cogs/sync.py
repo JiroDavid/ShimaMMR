@@ -1,10 +1,13 @@
 import logging
+from datetime import timedelta
 import discord
 from discord import app_commands
 from discord.ext import commands
 from discord.ext import tasks
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from val_bot.db.models import Player, PlayerPuuid, Match, MatchParticipant
+from val_bot.ingestion.base import NormalizedMatch
 from val_bot.db.match_service import create_pending_match
 from val_bot.ingestion.henrikdev import HenrikDevSource, PendingResolution
 from val_bot.bot.views.report_views import ConfirmDisputeView
@@ -23,6 +26,33 @@ async def consented_players_for_sync(session) -> list[dict]:
     players += [{"discord_id": d, "puuid": p, "region": r} for d, p, r in alts.all()]
     return players
 
+DUPLICATE_WINDOW = timedelta(hours=12)
+
+async def _find_duplicate_match(session, normalized: NormalizedMatch) -> Match | None:
+    """Fuzzy fallback for matches that already exist in the DB without an
+    external_match_id to dedup against - e.g. manually reported, or backfilled
+    from a CSV/history import. Matches on same map, same score-pair (checked
+    as a set since a manual report's Team1/Team2 don't necessarily line up
+    with HenrikDev's Red/Blue), same roster, played within DUPLICATE_WINDOW."""
+    participant_ids = {p.discord_id for p in normalized.participants}
+    score_pair = {normalized.team_a_score, normalized.team_b_score}
+    result = await session.execute(
+        select(Match)
+        .options(selectinload(Match.participants))
+        .where(
+            Match.map == normalized.map,
+            Match.played_at >= normalized.played_at - DUPLICATE_WINDOW,
+            Match.played_at <= normalized.played_at + DUPLICATE_WINDOW,
+        )
+    )
+    for match in result.scalars().unique():
+        if {match.team_a_score, match.team_b_score} != score_pair:
+            continue
+        if {p.discord_id for p in match.participants} != participant_ids:
+            continue
+        return match
+    return None
+
 async def sync_matches(session, henrikdev_source_factory) -> tuple[list[Match], list[PendingResolution]]:
     source = henrikdev_source_factory()
     normalized_matches = await source.fetch_new_matches()
@@ -35,6 +65,11 @@ async def sync_matches(session, henrikdev_source_factory) -> tuple[list[Match], 
     created = []
     for normalized in normalized_matches:
         if normalized.external_match_id in existing_ids:
+            continue
+        duplicate = await _find_duplicate_match(session, normalized)
+        if duplicate is not None:
+            if duplicate.external_match_id is None:
+                duplicate.external_match_id = normalized.external_match_id
             continue
         match = await create_pending_match(session, normalized)
         created.append(match)

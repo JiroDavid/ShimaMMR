@@ -8,9 +8,10 @@ from val_bot.bot.cogs.sync import (
     SyncCog, sync_matches, resolve_unknown_players, consented_players_for_sync,
 )
 from val_bot.db.models import Player, PlayerPuuid, Match
+from val_bot.db.match_service import create_pending_match
 from val_bot.ingestion.base import NormalizedMatch, NormalizedParticipant
 from val_bot.ingestion.henrikdev import PendingResolution, UnknownPlayer, HenrikDevSource
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 def _normalized_match(external_id="ext-1"):
     return NormalizedMatch(
@@ -53,6 +54,75 @@ async def test_sync_matches_skips_already_ingested_external_id(db_session):
     second, _ = await sync_matches(db_session, _fake_source([normalized]))
     assert len(first) == 1
     assert second == []
+
+async def test_sync_matches_skips_manually_imported_match_with_matching_roster_map_and_score(db_session):
+    for d in ("1", "2"):
+        db_session.add(Player(discord_id=d, consented=True))
+    await db_session.flush()
+
+    played_at = datetime(2026, 8, 23, 20, 0, tzinfo=timezone.utc)
+    manual = NormalizedMatch(
+        played_at=played_at, map="Ascent", source="manual",
+        team_a_score=13, team_b_score=10, reported_by_discord_id="csv-import",
+        participants=[
+            NormalizedParticipant(discord_id="1", team="A"),
+            NormalizedParticipant(discord_id="2", team="B"),
+        ],
+    )
+    await create_pending_match(db_session, manual)
+    await db_session.commit()
+
+    # HenrikDev's own Red/Blue team labeling doesn't have to agree with the
+    # manual report's Team1/Team2, and its score-pair may come back swapped -
+    # the fuzzy match should still catch it via roster + map + score set.
+    auto = NormalizedMatch(
+        played_at=played_at + timedelta(minutes=5), map="Ascent", source="henrikdev",
+        team_a_score=10, team_b_score=13, reported_by_discord_id="auto",
+        participants=[
+            NormalizedParticipant(discord_id="1", team="B"),
+            NormalizedParticipant(discord_id="2", team="A"),
+        ],
+        external_match_id="real-henrikdev-id",
+    )
+    created, _ = await sync_matches(db_session, _fake_source([auto]))
+
+    assert created == []
+    result = await db_session.execute(select(Match))
+    matches = result.scalars().all()
+    assert len(matches) == 1
+    assert matches[0].external_match_id == "real-henrikdev-id"
+
+async def test_sync_matches_does_not_dedup_different_roster(db_session):
+    for d in ("1", "2", "3"):
+        db_session.add(Player(discord_id=d, consented=True))
+    await db_session.flush()
+
+    played_at = datetime(2026, 8, 23, 20, 0, tzinfo=timezone.utc)
+    manual = NormalizedMatch(
+        played_at=played_at, map="Ascent", source="manual",
+        team_a_score=13, team_b_score=10, reported_by_discord_id="csv-import",
+        participants=[
+            NormalizedParticipant(discord_id="1", team="A"),
+            NormalizedParticipant(discord_id="2", team="B"),
+        ],
+    )
+    await create_pending_match(db_session, manual)
+    await db_session.commit()
+
+    different_roster = NormalizedMatch(
+        played_at=played_at + timedelta(minutes=5), map="Ascent", source="henrikdev",
+        team_a_score=13, team_b_score=10, reported_by_discord_id="auto",
+        participants=[
+            NormalizedParticipant(discord_id="1", team="A"),
+            NormalizedParticipant(discord_id="3", team="B"),
+        ],
+        external_match_id="real-henrikdev-id",
+    )
+    created, _ = await sync_matches(db_session, _fake_source([different_roster]))
+
+    assert len(created) == 1
+    result = await db_session.execute(select(Match))
+    assert len(result.scalars().all()) == 2
 
 async def test_sync_matches_surfaces_unresolved_matches(db_session):
     pending = PendingResolution(
