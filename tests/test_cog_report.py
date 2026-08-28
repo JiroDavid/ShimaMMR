@@ -41,6 +41,46 @@ async def _pending_match(db_session):
     await db_session.commit()
     return match.id
 
+async def _auto_synced_pending_match(db_session):
+    for d in ("1", "2", "3", "4"):
+        db_session.add(Player(discord_id=d))
+    await db_session.flush()
+    normalized = NormalizedMatch(
+        played_at=datetime.now(timezone.utc), map="Fracture", source="henrikdev",
+        team_a_score=13, team_b_score=7, reported_by_discord_id="auto",
+        participants=[
+            NormalizedParticipant(discord_id="1", team="A"),
+            NormalizedParticipant(discord_id="2", team="A"),
+            NormalizedParticipant(discord_id="3", team="B"),
+            NormalizedParticipant(discord_id="4", team="B"),
+        ],
+    )
+    match = await create_pending_match(db_session, normalized)
+    await db_session.commit()
+    return match.id
+
+async def test_confirm_button_allows_any_participant_on_auto_synced_match(db_session):
+    match_id = await _auto_synced_pending_match(db_session)
+    session_factory = MagicMock()
+    session_factory.return_value.__aenter__ = AsyncMock(return_value=db_session)
+    session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    view = ConfirmDisputeView(session_factory, match_id)
+    interaction = MagicMock()
+    # "1" and "2" are on the SAME team - not an opposing participant - but
+    # since "auto" (the HenrikDev sync) isn't a real participant, there's no
+    # self-report bias to guard against, so any participant should confirm.
+    interaction.user.id = "2"
+    interaction.user.roles = []
+    interaction.user.guild_permissions.administrator = False
+    interaction.response.edit_message = AsyncMock()
+
+    await view.confirm.callback(interaction)
+
+    match = await db_session.get(Match, match_id)
+    assert match.status == "confirmed"
+    interaction.response.edit_message.assert_awaited_once()
+
 async def test_confirm_button_applies_match(db_session):
     match_id = await _pending_match(db_session)
     session_factory = MagicMock()

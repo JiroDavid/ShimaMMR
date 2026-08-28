@@ -5,13 +5,14 @@ from val_bot.config import Config
 from val_bot.db.session import make_engine, make_session_factory
 
 class ValBot(commands.Bot):
-    def __init__(self, session_factory, henrikdev_api_key: str | None):
+    def __init__(self, session_factory, henrikdev_api_key: str | None, sync_announce_channel_id: int | None = None):
         intents = discord.Intents.default()
         intents.members = True
         intents.message_content = True
         super().__init__(command_prefix="v!", intents=intents)
         self.session_factory = session_factory
         self.henrikdev_api_key = henrikdev_api_key
+        self.sync_announce_channel_id = sync_announce_channel_id
 
     async def setup_hook(self):
         from val_bot.bot.cogs.linking import setup as setup_linking
@@ -31,7 +32,10 @@ class ValBot(commands.Bot):
         await self.tree.sync()
 
 def build_bot(config: Config, session_factory) -> ValBot:
-    bot = ValBot(session_factory=session_factory, henrikdev_api_key=config.henrikdev_api_key)
+    bot = ValBot(
+        session_factory=session_factory, henrikdev_api_key=config.henrikdev_api_key,
+        sync_announce_channel_id=config.sync_announce_channel_id,
+    )
 
     @bot.tree.command(name="ping", description="Check that the bot is alive")
     async def ping(interaction: discord.Interaction):

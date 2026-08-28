@@ -169,12 +169,14 @@ class ConfirmDisputeView(discord.ui.View):
                 session, self.match_id, match.reported_by_discord_id
             )
             user_team = await _participant_team(session, self.match_id, str(interaction.user.id))
-            is_opposing_participant = (
-                reporter_team is not None
-                and user_team is not None
-                and user_team != reporter_team
-            )
-            if not (is_opposing_participant or _has_admin_role(interaction.user)):
+            if reporter_team is None:
+                # No real participant self-reported this (e.g. auto-synced
+                # from HenrikDev) - no self-report bias to guard against, so
+                # any participant may confirm.
+                can_confirm = user_team is not None
+            else:
+                can_confirm = user_team is not None and user_team != reporter_team
+            if not (can_confirm or _has_admin_role(interaction.user)):
                 await interaction.response.send_message(
                     "Only someone on the opposing team (or an Admin) can confirm this match.",
                     ephemeral=True,

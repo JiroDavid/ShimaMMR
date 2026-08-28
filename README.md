@@ -3,8 +3,10 @@
 ## Setup (either machine — WSL dev or the Windows laptop running Docker Desktop)
 
 1. Copy `.env.example` to `.env` and fill in `DISCORD_TOKEN` (from
-   https://discord.com/developers/applications) and, once you have one,
-   `HENRIKDEV_API_KEY`.
+   https://discord.com/developers/applications), `HENRIKDEV_API_KEY` (a free
+   "Basic" key from https://api.henrikdev.xyz/dashboard/ — required, the API
+   now 401s without one), and `SYNC_ANNOUNCE_CHANNEL_ID` (the channel the
+   background match-sync poller posts new-match confirmations to).
 2. `docker compose up --build`
 
 That's the entire deployment step on both machines — build once on WSL to
@@ -47,11 +49,20 @@ pytest -v
 
 ## Commands
 
-- `/link <riot_username> <riot_tag>` — link your Discord account to your Riot ID
+- `/link <riot_username> <riot_tag>` — link your Discord account to your Riot ID.
+  Resolves your account against Riot's servers to enable automatic match
+  detection; still succeeds (with a warning) if that lookup fails, e.g. a typo.
 - `/mmr [@user]` — check MMR and rank
 - `/leaderboard` — server leaderboard
 - `/report-match` — report a pickup match result
 - `/match-history [@user]` — recent matches, expandable to the full scoreboard
-- `/void-match <match_id>`, `/correct-match <match_id>` — Admin role only
-- `/sync-matches` — Admin role only; pulls new custom games from HenrikDev
-  for linked, consented players
+- `/void-match <match_id>`, `/correct-match <match_id>` — admin only
+  (real Discord "Administrator" permission, not a specific role name)
+- `/sync-matches` — admin only; manually checks HenrikDev for new custom
+  games among linked players right now. A background poller also runs this
+  automatically every 15 minutes and posts what it finds to
+  `SYNC_ANNOUNCE_CHANNEL_ID`. Either way, a detected match still needs a
+  participant (or admin) to hit Confirm before MMR applies — same as a
+  manually reported match. If a detected match includes players who aren't
+  recognized, it posts a prompt asking who they are on Discord before the
+  match can be created.

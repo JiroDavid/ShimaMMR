@@ -4,14 +4,29 @@ import pytest
 from discord import app_commands
 from discord.ext import commands
 from sqlalchemy import select
-from val_bot.bot.cogs.sync import SyncCog, sync_matches
-from val_bot.db.models import Player, Match
+from val_bot.bot.cogs.sync import (
+    SyncCog, sync_matches, resolve_unknown_players, consented_players_for_sync,
+)
+from val_bot.db.models import Player, PlayerPuuid, Match
 from val_bot.ingestion.base import NormalizedMatch, NormalizedParticipant
+from val_bot.ingestion.henrikdev import PendingResolution, UnknownPlayer, HenrikDevSource
 from datetime import datetime, timezone
 
-def _fake_source(matches):
+def _normalized_match(external_id="ext-1"):
+    return NormalizedMatch(
+        played_at=datetime.now(timezone.utc), map="Sunset", source="henrikdev",
+        team_a_score=13, team_b_score=9, reported_by_discord_id="auto",
+        participants=[
+            NormalizedParticipant(discord_id="1", team="A"),
+            NormalizedParticipant(discord_id="2", team="B"),
+        ],
+        external_match_id=external_id,
+    )
+
+def _fake_source(matches, unresolved=None):
     source = AsyncMock()
     source.fetch_new_matches = AsyncMock(return_value=matches)
+    source.unresolved_matches = unresolved or []
     return lambda: source
 
 async def test_sync_matches_creates_pending_match_for_new_data(db_session):
@@ -19,18 +34,11 @@ async def test_sync_matches_creates_pending_match_for_new_data(db_session):
         db_session.add(Player(discord_id=d, consented=True))
     await db_session.flush()
 
-    normalized = NormalizedMatch(
-        played_at=datetime.now(timezone.utc), map="Sunset", source="henrikdev",
-        team_a_score=13, team_b_score=9, reported_by_discord_id="auto",
-        participants=[
-            NormalizedParticipant(discord_id="1", team="A"),
-            NormalizedParticipant(discord_id="2", team="B"),
-        ],
-        external_match_id="ext-1",
-    )
-    ids = await sync_matches(db_session, _fake_source([normalized]))
-    assert len(ids) == 1
-    match = await db_session.get(Match, ids[0])
+    created, unresolved = await sync_matches(db_session, _fake_source([_normalized_match()]))
+
+    assert len(created) == 1
+    assert unresolved == []
+    match = await db_session.get(Match, created[0].id)
     assert match.status == "pending"
     assert match.external_match_id == "ext-1"
 
@@ -39,20 +47,99 @@ async def test_sync_matches_skips_already_ingested_external_id(db_session):
         db_session.add(Player(discord_id=d, consented=True))
     await db_session.flush()
 
-    normalized = NormalizedMatch(
-        played_at=datetime.now(timezone.utc), map="Sunset", source="henrikdev",
-        team_a_score=13, team_b_score=9, reported_by_discord_id="auto",
-        participants=[
-            NormalizedParticipant(discord_id="1", team="A"),
-            NormalizedParticipant(discord_id="2", team="B"),
-        ],
-        external_match_id="ext-1",
-    )
-    first_ids = await sync_matches(db_session, _fake_source([normalized]))
+    normalized = _normalized_match()
+    first, _ = await sync_matches(db_session, _fake_source([normalized]))
     await db_session.commit()
-    second_ids = await sync_matches(db_session, _fake_source([normalized]))
-    assert len(first_ids) == 1
-    assert second_ids == []
+    second, _ = await sync_matches(db_session, _fake_source([normalized]))
+    assert len(first) == 1
+    assert second == []
+
+async def test_sync_matches_surfaces_unresolved_matches(db_session):
+    pending = PendingResolution(
+        raw_match={}, map="Bind", played_at=datetime.now(timezone.utc), region="eu",
+        unknown_players=[UnknownPlayer(puuid="unk", name="stranger", tag="123")],
+    )
+    created, unresolved = await sync_matches(db_session, _fake_source([], unresolved=[pending]))
+    assert created == []
+    assert unresolved == [pending]
+
+async def test_consented_players_for_sync_includes_primary_and_alt_puuids(db_session):
+    db_session.add(Player(discord_id="1", consented=True, puuid="puuid-1", region="eu"))
+    db_session.add(Player(discord_id="2", consented=False, puuid="puuid-2", region="eu"))  # not consented - excluded
+    db_session.add(Player(discord_id="3", consented=True, puuid=None, region=None))  # no puuid yet - excluded
+    db_session.add(PlayerPuuid(puuid="alt-puuid-1", discord_id="1", region="eu"))
+    await db_session.flush()
+
+    players = await consented_players_for_sync(db_session)
+
+    puuids = {p["puuid"] for p in players}
+    assert puuids == {"puuid-1", "alt-puuid-1"}
+
+async def test_resolve_unknown_players_links_brand_new_player(db_session):
+    db_session.add(Player(discord_id="1", consented=True, puuid="puuid-1", region="eu"))
+    db_session.add(Player(discord_id="2", consented=True, puuid="puuid-2", region="eu"))
+    await db_session.flush()
+
+    consented = [{"discord_id": "1", "puuid": "puuid-1", "region": "eu"}, {"discord_id": "2", "puuid": "puuid-2", "region": "eu"}]
+    source = HenrikDevSource(api_key=None, consented_players=consented)
+    raw_match = {
+        "metadata": {"match_id": "m1", "map": {"name": "Bind"}, "started_at": "2026-08-24T20:33:00.591Z", "region": "eu"},
+        "players": [
+            {"puuid": "puuid-1", "team_id": "Red", "stats": {"kills": 1, "deaths": 1, "assists": 1, "score": 100}},
+            {"puuid": "puuid-2", "team_id": "Red", "stats": {"kills": 1, "deaths": 1, "assists": 1, "score": 100}},
+            {"puuid": "unk-puuid", "team_id": "Blue", "stats": {"kills": 1, "deaths": 1, "assists": 1, "score": 100}},
+        ],
+        "teams": [
+            {"team_id": "Red", "rounds": {"won": 13}},
+            {"team_id": "Blue", "rounds": {"won": 5}},
+        ],
+    }
+    pending = PendingResolution(
+        raw_match=raw_match, map="Bind", played_at=datetime.now(timezone.utc), region="eu",
+        unknown_players=[UnknownPlayer(puuid="unk-puuid", name="newbie", tag="000")],
+    )
+
+    match = await resolve_unknown_players(db_session, source, pending, resolved={"unk-puuid": "999"})
+
+    new_player = await db_session.get(Player, "999")
+    assert new_player is not None
+    assert new_player.puuid == "unk-puuid"
+    assert new_player.consented is True
+    assert len(match.participants) == 3
+
+async def test_resolve_unknown_players_stores_alt_puuid_for_already_linked_player(db_session):
+    db_session.add(Player(discord_id="1", consented=True, puuid="puuid-1", region="eu"))
+    db_session.add(Player(discord_id="2", consented=True, puuid="puuid-2", region="eu"))
+    # "2" is already linked under puuid-2, but shows up in this match on a
+    # different account (an alt) - should NOT overwrite their primary puuid.
+    db_session.add(Player(discord_id="999", consented=True, puuid="puuid-999-main", region="eu"))
+    await db_session.flush()
+
+    consented = [{"discord_id": "1", "puuid": "puuid-1", "region": "eu"}, {"discord_id": "999", "puuid": "puuid-999-main", "region": "eu"}]
+    source = HenrikDevSource(api_key=None, consented_players=consented)
+    raw_match = {
+        "metadata": {"match_id": "m1", "map": {"name": "Bind"}, "started_at": "2026-08-24T20:33:00.591Z", "region": "eu"},
+        "players": [
+            {"puuid": "puuid-1", "team_id": "Red", "stats": {"kills": 1, "deaths": 1, "assists": 1, "score": 100}},
+            {"puuid": "puuid-999-main", "team_id": "Red", "stats": {"kills": 1, "deaths": 1, "assists": 1, "score": 100}},
+            {"puuid": "alt-of-999", "team_id": "Blue", "stats": {"kills": 1, "deaths": 1, "assists": 1, "score": 100}},
+        ],
+        "teams": [
+            {"team_id": "Red", "rounds": {"won": 13}},
+            {"team_id": "Blue", "rounds": {"won": 5}},
+        ],
+    }
+    pending = PendingResolution(
+        raw_match=raw_match, map="Bind", played_at=datetime.now(timezone.utc), region="eu",
+        unknown_players=[UnknownPlayer(puuid="alt-of-999", name="samepersonalt", tag="000")],
+    )
+
+    await resolve_unknown_players(db_session, source, pending, resolved={"alt-of-999": "999"})
+
+    player_999 = await db_session.get(Player, "999")
+    assert player_999.puuid == "puuid-999-main"  # primary untouched
+    alt = await db_session.get(PlayerPuuid, "alt-of-999")
+    assert alt.discord_id == "999"
 
 def test_sync_matches_app_command_gates_on_administrator_permission():
     predicate = SyncCog.sync_matches_cmd.checks[0]

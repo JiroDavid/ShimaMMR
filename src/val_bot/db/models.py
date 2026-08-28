@@ -12,12 +12,26 @@ class Player(Base):
     discord_id: Mapped[str] = mapped_column(String, primary_key=True)
     riot_username: Mapped[str | None] = mapped_column(String, nullable=True)
     riot_tag: Mapped[str | None] = mapped_column(String, nullable=True)
+    puuid: Mapped[str | None] = mapped_column(String, nullable=True)
+    region: Mapped[str | None] = mapped_column(String, nullable=True)
     consented: Mapped[bool] = mapped_column(Boolean, default=False)
     mmr: Mapped[int] = mapped_column(Integer, default=700)
     games_played: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc)
     )
+
+
+class PlayerPuuid(Base):
+    """Additional Riot accounts (alts) linked to a Discord ID beyond the
+    primary one on players.puuid - populated when an unrecognized player in
+    a synced match is manually identified as someone already linked under a
+    different account. Sync-matching consults both tables; nothing else
+    (display, /link) needs to know this exists."""
+    __tablename__ = "player_puuids"
+    puuid: Mapped[str] = mapped_column(String, primary_key=True)
+    discord_id: Mapped[str] = mapped_column(ForeignKey("players.discord_id"))
+    region: Mapped[str] = mapped_column(String)
 
 
 class Match(Base):
