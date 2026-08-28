@@ -29,6 +29,8 @@ class ValBot(commands.Bot):
         await setup_admin(self)
         from val_bot.bot.cogs.sync import setup as setup_sync
         await setup_sync(self)
+        from val_bot.bot.cogs.pickup import setup as setup_pickup
+        await setup_pickup(self)
         await self.tree.sync()
 
 def build_bot(config: Config, session_factory) -> ValBot:
