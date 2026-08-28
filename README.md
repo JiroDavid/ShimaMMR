@@ -39,32 +39,58 @@ file that's tracked in this git repo.
 
 ### Windows laptop setup (full walkthrough)
 
+**Manual, one-time, needs a human at the keyboard** (Claude Code can't
+click through a GUI installer or generate your API credentials for you):
+
 1. Install [Docker Desktop](https://www.docker.com/products/docker-desktop/)
    and make sure the **WSL2 backend** is enabled (Settings → General → "Use
    the WSL 2 based engine"). Docker Desktop will prompt to install WSL2 on
-   first run if it isn't already there.
-2. Install [Git for Windows](https://git-scm.com/downloads/win) (or use Git
-   inside a WSL2 distro if you'd rather run everything from there).
-3. Clone the repo:
+   first run if it isn't already there. **Launch Docker Desktop and leave it
+   running** — `docker compose` commands fail if the Docker Desktop app
+   itself isn't open.
+2. Have these three values ready (or gather them now): your `DISCORD_TOKEN`
+   (from https://discord.com/developers/applications), a free HenrikDev
+   "Basic" `HENRIKDEV_API_KEY` (from https://api.henrikdev.xyz/dashboard/),
+   and the `SYNC_ANNOUNCE_CHANNEL_ID` for the channel match-sync should post
+   to.
+
+**From here, hand this repo to Claude Code (or run it yourself) — every
+step below is just terminal commands:**
+
+1. Clone the repo (skip if it's already cloned — `git pull` instead):
    ```bash
    git clone git@github.com:JiroDavid/ShimaMMR.git
    cd ShimaMMR
    ```
-4. Copy `.env.example` to `.env` and fill in the same three values as above
-   (`DISCORD_TOKEN`, `HENRIKDEV_API_KEY`, `SYNC_ANNOUNCE_CHANNEL_ID`) — `.env`
-   is gitignored, so this step is per-machine, not something `git pull` gives you.
-5. `docker compose up --build` — this builds the image and starts the bot,
-   reading/writing straight from the `bot.db` that came down with `git clone`.
-6. Leave the container running (`docker compose up -d --build` to run it
-   detached in the background instead of holding the terminal open). It'll
-   restart automatically on reboot per `docker-compose.yml`'s
-   `restart: unless-stopped`.
+2. Create `.env` from the template and fill in the three values from above:
+   ```bash
+   cp .env.example .env
+   ```
+   (`.env` is gitignored — `git pull` never brings this file down, it has
+   to be created and filled in on every new machine.)
+3. Build and start the bot, detached so it keeps running after the
+   terminal closes:
+   ```bash
+   docker compose up -d --build
+   ```
+4. Verify it actually connected to Discord:
+   ```bash
+   docker compose logs bot
+   ```
+   Look for `discord.gateway: Shard ID None has connected to Gateway` with
+   no error traceback after it. If `/ping` (or `v!ping`) doesn't get a
+   `pong` back in Discord within a few seconds, something's wrong — check
+   the logs above for the actual error.
+
+It'll restart automatically on reboot or crash per `docker-compose.yml`'s
+`restart: unless-stopped`, so this is a one-time setup, not something to
+repeat every time the laptop turns on.
 
 From then on, updating the laptop to the latest code/data is just:
 ```bash
 docker compose down
 git pull
-docker compose up --build
+docker compose up -d --build
 ```
 
 ### Moving between machines
