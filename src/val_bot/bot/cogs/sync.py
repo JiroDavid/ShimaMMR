@@ -3,7 +3,6 @@ from datetime import timedelta
 import discord
 from discord import app_commands
 from discord.ext import commands
-from discord.ext import tasks
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from val_bot.db.models import (
@@ -178,6 +177,27 @@ async def reannounce_match_callback(send, session_factory, match_id: int):
         map_name = match.map
     await announce_ready_match(send, session_factory, match_id, map_name)
 
+async def reannounce_all_pending_callback(send, session_factory) -> int:
+    """Same as reannounce_match_callback, but for every pending match at
+    once - so recovering from a batch of failed announcements doesn't take
+    one command per match."""
+    async with session_factory() as session:
+        result = await session.execute(
+            select(Match.id, Match.map).where(Match.status == "pending").order_by(Match.played_at)
+        )
+        pending = result.all()
+
+    if not pending:
+        await send("No pending matches to re-announce.")
+        return 0
+
+    for match_id, map_name in pending:
+        try:
+            await announce_ready_match(send, session_factory, match_id, map_name)
+        except Exception:
+            logger.exception("Failed to re-announce match #%s", match_id)
+    return len(pending)
+
 async def _filter_unannounced(session, unresolved: list[PendingResolution]) -> list[PendingResolution]:
     """Drops any PendingResolution whose match_id has already had its
     'who is this?' prompt posted once, and records new ones as announced -
@@ -193,13 +213,23 @@ async def _filter_unannounced(session, unresolved: list[PendingResolution]) -> l
         new_unresolved.append(pending)
     return new_unresolved
 
-async def _sync_and_announce(session_factory, henrikdev_api_key, send):
+async def _player_is_synced(session, discord_id: str) -> bool:
+    player = await session.get(Player, discord_id)
+    return player is not None and player.consented and player.puuid is not None
+
+async def _sync_and_announce(session_factory, henrikdev_api_key, send, only_discord_id: str | None = None):
     async with session_factory() as session:
         consented = await consented_players_for_sync(session)
         ignored = await ignored_puuids_for_sync(session)
 
+        fetch_only_puuids = None
+        if only_discord_id is not None:
+            fetch_only_puuids = {p["puuid"] for p in consented if p["discord_id"] == only_discord_id}
+
         def source_factory():
-            return HenrikDevSource(henrikdev_api_key, consented, ignored_puuids=ignored)
+            return HenrikDevSource(
+                henrikdev_api_key, consented, ignored_puuids=ignored, fetch_only_puuids=fetch_only_puuids,
+            )
 
         created, unresolved = await sync_matches(session, source_factory)
         unresolved = await _filter_unannounced(session, unresolved)
@@ -210,47 +240,56 @@ async def _sync_and_announce(session_factory, henrikdev_api_key, send):
         return False
 
     for match_id, map_name in created_info:
-        await announce_ready_match(send, session_factory, match_id, map_name)
+        try:
+            await announce_ready_match(send, session_factory, match_id, map_name)
+        except Exception:
+            # one match's announcement failing (e.g. an expired interaction
+            # token) shouldn't stop every other match this run from being
+            # announced too - it's already safely committed either way and
+            # can be recovered with /reannounce-match
+            logger.exception("Failed to announce match #%s - it's still saved, use /reannounce-match", match_id)
     for pending in unresolved:
-        await announce_unresolved_match(send, session_factory, source_factory, pending)
+        try:
+            await announce_unresolved_match(send, session_factory, source_factory, pending)
+        except Exception:
+            # already marked as announced (see _filter_unannounced) even
+            # though the send itself failed, so this won't come back on its
+            # own next sync - logged so it can be investigated manually
+            logger.exception("Failed to announce unresolved match on %s", pending.map)
     return True
 
 class SyncCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        if getattr(bot, "sync_announce_channel_id", None):
-            self.poll_for_matches.start()
-
-    def cog_unload(self):
-        if self.poll_for_matches.is_running():
-            self.poll_for_matches.cancel()
-
-    @tasks.loop(minutes=15)
-    async def poll_for_matches(self):
-        try:
-            channel = self.bot.get_channel(self.bot.sync_announce_channel_id)
-            if channel is None:
-                channel = await self.bot.fetch_channel(self.bot.sync_announce_channel_id)
-            await _sync_and_announce(self.bot.session_factory, self.bot.henrikdev_api_key, channel.send)
-        except Exception:
-            # a transient API/network error shouldn't permanently kill the
-            # 15-minute poller until the bot restarts - log and retry next tick
-            logger.exception("Background HenrikDev sync failed")
-
-    @poll_for_matches.before_loop
-    async def before_poll_for_matches(self):
-        await self.bot.wait_until_ready()
 
     @app_commands.command(name="sync-matches", description="Check HenrikDev for new pickup matches (Admin only)")
+    @app_commands.describe(
+        player="Only check this player's recent matches instead of everyone - "
+               "much faster and uses far less API quota (their match still includes everyone else in it)"
+    )
     @app_commands.checks.has_permissions(administrator=True)
-    async def sync_matches_cmd(self, interaction: discord.Interaction):
+    async def sync_matches_cmd(self, interaction: discord.Interaction, player: discord.Member | None = None):
         await interaction.response.defer(ephemeral=True)
+
+        if player is not None:
+            async with self.bot.session_factory() as session:
+                synced = await _player_is_synced(session, str(player.id))
+            if not synced:
+                await interaction.followup.send(
+                    f"<@{player.id}> isn't linked yet - they need to run /link first before "
+                    "a sync can be narrowed to just them.",
+                    ephemeral=True,
+                )
+                return
 
         async def send(content, view=None):
             await interaction.followup.send(content, view=view)
 
         try:
-            found = await _sync_and_announce(self.bot.session_factory, self.bot.henrikdev_api_key, send)
+            found = await _sync_and_announce(
+                self.bot.session_factory, self.bot.henrikdev_api_key, send,
+                only_discord_id=str(player.id) if player else None,
+            )
         except Exception:
             logger.exception("Manual /sync-matches failed")
             await interaction.followup.send(
@@ -264,9 +303,22 @@ class SyncCog(commands.Cog):
 
     @commands.command(name="sync-matches")
     @commands.has_permissions(administrator=True)
-    async def sync_matches_prefix(self, ctx: commands.Context):
+    async def sync_matches_prefix(self, ctx: commands.Context, player: discord.Member | None = None):
+        if player is not None:
+            async with self.bot.session_factory() as session:
+                synced = await _player_is_synced(session, str(player.id))
+            if not synced:
+                await ctx.send(
+                    f"<@{player.id}> isn't linked yet - they need to run /link first before "
+                    "a sync can be narrowed to just them."
+                )
+                return
+
         try:
-            found = await _sync_and_announce(self.bot.session_factory, self.bot.henrikdev_api_key, ctx.send)
+            found = await _sync_and_announce(
+                self.bot.session_factory, self.bot.henrikdev_api_key, ctx.send,
+                only_discord_id=str(player.id) if player else None,
+            )
         except Exception:
             logger.exception("Manual v!sync-matches failed")
             await ctx.send(
@@ -279,20 +331,27 @@ class SyncCog(commands.Cog):
 
     @app_commands.command(
         name="reannounce-match",
-        description="Re-post the confirm/dispute prompt for a pending match (Admin only)",
+        description="Re-post the confirm/dispute prompt for a pending match, or all of them if no id given (Admin only)",
     )
+    @app_commands.describe(match_id="Leave blank to re-announce every pending match at once")
     @app_commands.checks.has_permissions(administrator=True)
-    async def reannounce_match_cmd(self, interaction: discord.Interaction, match_id: int):
+    async def reannounce_match_cmd(self, interaction: discord.Interaction, match_id: int | None = None):
         await interaction.response.defer()
 
         async def send(content, view=None):
             await interaction.followup.send(content, view=view)
 
+        if match_id is None:
+            await reannounce_all_pending_callback(send, self.bot.session_factory)
+            return
         await reannounce_match_callback(send, self.bot.session_factory, match_id)
 
     @commands.command(name="reannounce-match")
     @commands.has_permissions(administrator=True)
-    async def reannounce_match_prefix(self, ctx: commands.Context, match_id: int):
+    async def reannounce_match_prefix(self, ctx: commands.Context, match_id: int | None = None):
+        if match_id is None:
+            await reannounce_all_pending_callback(ctx.send, self.bot.session_factory)
+            return
         await reannounce_match_callback(ctx.send, self.bot.session_factory, match_id)
 
 async def setup(bot):

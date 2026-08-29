@@ -82,6 +82,7 @@ async def test_finalize_excludes_players_left_unselected(db_session):
 
     from val_bot.db.models import Match
     from sqlalchemy import select
-    result = await db_session.execute(select(Match))
+    from sqlalchemy.orm import selectinload
+    result = await db_session.execute(select(Match).options(selectinload(Match.participants)))
     match = result.scalar_one()
     assert len(match.participants) == 1

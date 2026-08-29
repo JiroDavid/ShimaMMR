@@ -27,8 +27,6 @@ touches MMR until a participant (or admin) confirms it.
    - `DISCORD_TOKEN` — from https://discord.com/developers/applications
    - `HENRIKDEV_API_KEY` — a free "Basic" key from
      https://api.henrikdev.xyz/dashboard/ (required — the API 401s without one)
-   - `SYNC_ANNOUNCE_CHANNEL_ID` — the channel ID the background match-sync
-     poller posts new-match confirmations to
 2. `docker compose up --build`
 
 That's the entire deployment step on both machines — build once on WSL to
@@ -48,11 +46,9 @@ click through a GUI installer or generate your API credentials for you):
    first run if it isn't already there. **Launch Docker Desktop and leave it
    running** — `docker compose` commands fail if the Docker Desktop app
    itself isn't open.
-2. Have these three values ready (or gather them now): your `DISCORD_TOKEN`
-   (from https://discord.com/developers/applications), a free HenrikDev
-   "Basic" `HENRIKDEV_API_KEY` (from https://api.henrikdev.xyz/dashboard/),
-   and the `SYNC_ANNOUNCE_CHANNEL_ID` for the channel match-sync should post
-   to.
+2. Have these two values ready (or gather them now): your `DISCORD_TOKEN`
+   (from https://discord.com/developers/applications) and a free HenrikDev
+   "Basic" `HENRIKDEV_API_KEY` (from https://api.henrikdev.xyz/dashboard/).
 
 **From here, hand this repo to Claude Code (or run it yourself) — every
 step below is just terminal commands:**
@@ -139,11 +135,15 @@ Every command below works as both a slash command (`/whatever`) and a
 - `/match-history [@user]` — recent matches, expandable to the full scoreboard
 - `/void-match <match_id>`, `/correct-match <match_id>` — admin only
   (real Discord "Administrator" permission, not a specific role name)
-- `/sync-matches` — admin only; manually checks HenrikDev for new custom
-  games among linked players right now. A background poller also runs this
-  automatically every 15 minutes and posts what it finds to
-  `SYNC_ANNOUNCE_CHANNEL_ID`. Either way, a detected match still needs a
-  participant (or admin) to hit Confirm before MMR applies — same as a
-  manually reported match. If a detected match includes players who aren't
-  recognized, it posts a prompt asking who they are on Discord before the
-  match can be created.
+- `/sync-matches [@user]` — admin only; checks HenrikDev for new custom
+  games right now (run it right after a pickup finishes). Checks everyone
+  linked by default, or pass a player to check just their recent matches
+  instead — much faster and uses far less API quota, and still detects the
+  whole match since one player's history includes the full roster. A
+  detected match still needs a participant (or admin) to hit Confirm before
+  MMR applies — same as a manually reported match. If a detected match
+  includes players who aren't recognized, it posts a prompt asking who they
+  are on Discord before the match can be created.
+- `/reannounce-match <match_id>` — admin only; re-posts the confirm/dispute
+  prompt for a match that's already saved as pending but never got a
+  working announcement (e.g. a transient Discord API error).

@@ -9,8 +9,8 @@ logger = logging.getLogger(__name__)
 
 BASE_URL = "https://api.henrikdev.xyz/valorant"
 MATCH_HISTORY_PAGE_SIZE = 10
-# Basic API keys are limited to 30 req/min - space requests out so a sync
-# run doesn't burst past that on its own.
+# Nominally "Basic" API keys allow 30 req/min, but observed real-world
+# throughput has been far lower - space requests out defensively.
 REQUEST_INTERVAL_SECONDS = 2.1
 
 async def resolve_account(api_key: str | None, name: str, tag: str) -> dict | None:
@@ -46,6 +46,7 @@ class HenrikDevSource(MatchDataSource):
     def __init__(
         self, api_key: str | None, consented_players: list[dict],
         ignored_puuids: set[str] | None = None,
+        fetch_only_puuids: set[str] | None = None,
     ):
         self.api_key = api_key
         self.consented_players = consented_players
@@ -54,6 +55,15 @@ class HenrikDevSource(MatchDataSource):
         # like "known" for classification purposes (never re-prompted) but
         # still dropped from participants, same as any other unlinked puuid
         self._ignored_puuids = set(ignored_puuids or ())
+        # which players' match histories to actually fetch via the API -
+        # separate from consented_players/_puuid_to_discord_id above, which
+        # stay the FULL roster regardless, since classification (roster
+        # overlap, participant mapping) needs everyone known even when only
+        # fetching one player's history is enough to surface the whole match
+        self._fetch_players = (
+            [p for p in consented_players if p["puuid"] in fetch_only_puuids]
+            if fetch_only_puuids is not None else consented_players
+        )
         self._request_interval = REQUEST_INTERVAL_SECONDS
         self.unresolved_matches: list[PendingResolution] = []
 
@@ -151,7 +161,7 @@ class HenrikDevSource(MatchDataSource):
         seen_pending: set[str] = set()
         self.unresolved_matches = []
         async with httpx.AsyncClient() as client:
-            for index, player in enumerate(self.consented_players):
+            for index, player in enumerate(self._fetch_players):
                 if index > 0:
                     await asyncio.sleep(self._request_interval)
                 try:
@@ -159,15 +169,18 @@ class HenrikDevSource(MatchDataSource):
                 except httpx.HTTPStatusError as exc:
                     if exc.response.status_code == 429:
                         # still rate-limited after the one retry in
-                        # _get_with_backoff - skip this player rather than
-                        # aborting the whole sync; they'll get picked up on
-                        # the next run instead of losing everyone else's
-                        # progress too
+                        # _get_with_backoff - the key is genuinely out of
+                        # budget right now, so stop this run entirely rather
+                        # than burning through everyone else's requests too
+                        # (each one would just 429 as well, digging the
+                        # rate-limit hole deeper). Whatever's found so far
+                        # is still returned; the rest get picked up next sync.
                         logger.warning(
                             "Still rate-limited fetching matches for puuid %s - "
-                            "skipping for this sync run", player["puuid"],
+                            "stopping this sync run early (%d/%d players checked)",
+                            player["puuid"], index, len(self._fetch_players),
                         )
-                        continue
+                        break
                     raise
                 except httpx.TimeoutException:
                     # API didn't respond at all (as opposed to a 429) -

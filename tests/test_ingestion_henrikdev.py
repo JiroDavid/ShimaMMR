@@ -41,8 +41,11 @@ def _mock_matchlist(puuid: str, matches: list[dict]):
         return_value=httpx.Response(200, json={"data": matches})
     )
 
-def _source(consented_players=CONSENTED, ignored_puuids=None) -> HenrikDevSource:
-    source = HenrikDevSource(api_key=None, consented_players=consented_players, ignored_puuids=ignored_puuids)
+def _source(consented_players=CONSENTED, ignored_puuids=None, fetch_only_puuids=None) -> HenrikDevSource:
+    source = HenrikDevSource(
+        api_key=None, consented_players=consented_players,
+        ignored_puuids=ignored_puuids, fetch_only_puuids=fetch_only_puuids,
+    )
     source._request_interval = 0  # no need to actually throttle in tests
     return source
 
@@ -142,19 +145,47 @@ async def test_fetch_new_matches_skips_player_on_timeout():
     assert len(matches) == 1
 
 @respx.mock
-async def test_fetch_new_matches_skips_player_still_rate_limited_after_retry():
-    # puuid-1 stays 429 even after the one built-in retry - should be
-    # skipped rather than aborting the whole sync and losing puuid-2/3
-    respx.get(url__regex=r".*/by-puuid/matches/eu/pc/puuid-1.*").mock(
+async def test_fetch_new_matches_stops_early_when_still_rate_limited_after_retry():
+    # puuid-1 succeeds, then puuid-2 stays 429 even after the one built-in
+    # retry - the key is genuinely out of budget, so the whole run should
+    # stop there (returning whatever was already found) rather than
+    # continuing to burn through puuid-3 too
+    _mock_matchlist("puuid-1", [_match()])
+    respx.get(url__regex=r".*/by-puuid/matches/eu/pc/puuid-2.*").mock(
         return_value=httpx.Response(429, headers={"Retry-After": "0"}, json={"errors": [{"message": "rate limited"}]})
     )
-    _mock_matchlist("puuid-2", [_match()])
-    _mock_matchlist("puuid-3", [])
+    route3 = respx.get(url__regex=r".*/by-puuid/matches/eu/pc/puuid-3.*")
+    route3.mock(return_value=httpx.Response(200, json={"data": []}))
 
     source = _source()
     matches = await source.fetch_new_matches()
 
     assert len(matches) == 1
+    assert route3.call_count == 0
+
+@respx.mock
+async def test_fetch_new_matches_fetch_only_puuids_limits_requests_but_not_classification():
+    # only puuid-1's match history is fetched (1 request instead of 3), but
+    # the returned match's roster is still checked against the FULL
+    # consented list, so puuid-2/puuid-3 (also in that match) are still
+    # correctly recognized rather than surfaced as unknown
+    match = _match()  # puuid-1, puuid-2, puuid-3
+    _mock_matchlist("puuid-1", [match])
+    route2 = respx.get(url__regex=r".*/by-puuid/matches/eu/pc/puuid-2.*").mock(
+        return_value=httpx.Response(200, json={"data": []})
+    )
+    route3 = respx.get(url__regex=r".*/by-puuid/matches/eu/pc/puuid-3.*").mock(
+        return_value=httpx.Response(200, json={"data": []})
+    )
+
+    source = _source(fetch_only_puuids={"puuid-1"})
+    matches = await source.fetch_new_matches()
+
+    assert len(matches) == 1
+    assert len(matches[0].participants) == 3
+    assert source.unresolved_matches == []
+    assert route2.call_count == 0
+    assert route3.call_count == 0
 
 @respx.mock
 async def test_fetch_new_matches_treats_ignored_puuid_as_known_and_drops_them():

@@ -6,7 +6,7 @@ from discord.ext import commands
 from sqlalchemy import select
 from val_bot.bot.cogs.sync import (
     SyncCog, sync_matches, resolve_unknown_players, consented_players_for_sync,
-    reannounce_match_callback, _sync_and_announce,
+    reannounce_match_callback, reannounce_all_pending_callback, _sync_and_announce, _player_is_synced,
 )
 from val_bot.db.models import Player, PlayerPuuid, Match, IgnoredPuuid
 from val_bot.db.match_service import create_pending_match
@@ -30,6 +30,37 @@ def _fake_source(matches, unresolved=None):
     source.fetch_new_matches = AsyncMock(return_value=matches)
     source.unresolved_matches = unresolved or []
     return lambda: source
+
+async def test_player_is_synced_true_for_linked_consented_player(db_session):
+    db_session.add(Player(discord_id="1", consented=True, puuid="puuid-1", region="eu"))
+    await db_session.flush()
+    assert await _player_is_synced(db_session, "1") is True
+
+async def test_player_is_synced_false_for_unlinked_player(db_session):
+    assert await _player_is_synced(db_session, "999") is False
+
+async def test_sync_and_announce_scopes_fetch_to_only_discord_id(db_session):
+    db_session.add(Player(discord_id="1", consented=True, puuid="puuid-1", region="eu"))
+    db_session.add(Player(discord_id="2", consented=True, puuid="puuid-2", region="eu"))
+    await db_session.flush()
+
+    session_factory = MagicMock()
+    session_factory.return_value.__aenter__ = AsyncMock(return_value=db_session)
+    session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    captured_kwargs = {}
+
+    def fake_source(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        source = MagicMock()
+        source.fetch_new_matches = AsyncMock(return_value=[])
+        source.unresolved_matches = []
+        return source
+
+    with patch("val_bot.bot.cogs.sync.HenrikDevSource", side_effect=fake_source):
+        await _sync_and_announce(session_factory, None, AsyncMock(), only_discord_id="1")
+
+    assert captured_kwargs["fetch_only_puuids"] == {"puuid-1"}
 
 async def test_sync_matches_creates_pending_match_for_new_data(db_session):
     for d in ("1", "2"):
@@ -124,6 +155,39 @@ async def test_sync_matches_does_not_dedup_different_roster(db_session):
     assert len(created) == 1
     result = await db_session.execute(select(Match))
     assert len(result.scalars().all()) == 2
+
+async def test_sync_and_announce_keeps_going_after_one_announcement_fails(db_session):
+    for d in ("1", "2", "3", "4"):
+        db_session.add(Player(discord_id=d, consented=True))
+    await db_session.flush()
+
+    session_factory = MagicMock()
+    session_factory.return_value.__aenter__ = AsyncMock(return_value=db_session)
+    session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    match_a = _normalized_match(external_id="ext-a")
+    match_b = NormalizedMatch(
+        played_at=datetime.now(timezone.utc), map="Bind", source="henrikdev",
+        team_a_score=13, team_b_score=9, reported_by_discord_id="auto",
+        participants=[
+            NormalizedParticipant(discord_id="3", team="A"),
+            NormalizedParticipant(discord_id="4", team="B"),
+        ],
+        external_match_id="ext-b",
+    )
+
+    def fake_source(*args, **kwargs):
+        source = MagicMock()
+        source.fetch_new_matches = AsyncMock(return_value=[match_a, match_b])
+        source.unresolved_matches = []
+        return source
+
+    send = AsyncMock(side_effect=[Exception("boom"), None])
+    with patch("val_bot.bot.cogs.sync.HenrikDevSource", side_effect=fake_source):
+        found = await _sync_and_announce(session_factory, None, send)
+
+    assert found is True
+    assert send.await_count == 2  # second match still got announced despite the first failing
 
 async def test_sync_and_announce_only_announces_unresolved_match_once(db_session):
     session_factory = MagicMock()
@@ -372,6 +436,81 @@ async def test_reannounce_match_refuses_non_pending_match(db_session):
 
     send.assert_awaited_once_with(f"Match #{match.id} is already voided - nothing to re-announce.")
 
+async def test_reannounce_all_pending_announces_every_pending_match(db_session):
+    for d in ("1", "2"):
+        db_session.add(Player(discord_id=d, consented=True))
+    await db_session.flush()
+
+    def _normalized(map_name):
+        return NormalizedMatch(
+            played_at=datetime.now(timezone.utc), map=map_name, source="henrikdev",
+            team_a_score=13, team_b_score=6, reported_by_discord_id="auto",
+            participants=[
+                NormalizedParticipant(discord_id="1", team="A"),
+                NormalizedParticipant(discord_id="2", team="B"),
+            ],
+        )
+
+    pending_a = await create_pending_match(db_session, _normalized("Bind"))
+    pending_b = await create_pending_match(db_session, _normalized("Split"))
+    confirmed = await create_pending_match(db_session, _normalized("Ascent"))
+    confirmed.status = "confirmed"
+    await db_session.commit()
+
+    session_factory = MagicMock()
+    session_factory.return_value.__aenter__ = AsyncMock(return_value=db_session)
+    session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+    send = AsyncMock()
+
+    count = await reannounce_all_pending_callback(send, session_factory)
+
+    assert count == 2
+    assert send.await_count == 2
+    announced_content = [call.args[0] for call in send.await_args_list]
+    assert any(f"match #{pending_a.id}" in c for c in announced_content)
+    assert any(f"match #{pending_b.id}" in c for c in announced_content)
+    assert not any(f"match #{confirmed.id}" in c for c in announced_content)
+
+async def test_reannounce_all_pending_reports_when_nothing_pending(db_session):
+    session_factory = MagicMock()
+    session_factory.return_value.__aenter__ = AsyncMock(return_value=db_session)
+    session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+    send = AsyncMock()
+
+    count = await reannounce_all_pending_callback(send, session_factory)
+
+    assert count == 0
+    send.assert_awaited_once_with("No pending matches to re-announce.")
+
+async def test_reannounce_all_pending_keeps_going_after_one_failure(db_session):
+    for d in ("1", "2"):
+        db_session.add(Player(discord_id=d, consented=True))
+    await db_session.flush()
+
+    def _normalized(map_name):
+        return NormalizedMatch(
+            played_at=datetime.now(timezone.utc), map=map_name, source="henrikdev",
+            team_a_score=13, team_b_score=6, reported_by_discord_id="auto",
+            participants=[
+                NormalizedParticipant(discord_id="1", team="A"),
+                NormalizedParticipant(discord_id="2", team="B"),
+            ],
+        )
+
+    await create_pending_match(db_session, _normalized("Bind"))
+    await create_pending_match(db_session, _normalized("Split"))
+    await db_session.commit()
+
+    session_factory = MagicMock()
+    session_factory.return_value.__aenter__ = AsyncMock(return_value=db_session)
+    session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+    send = AsyncMock(side_effect=[Exception("boom"), None])
+
+    count = await reannounce_all_pending_callback(send, session_factory)
+
+    assert count == 2
+    assert send.await_count == 2  # second match still got announced despite the first failing
+
 def test_reannounce_match_app_command_gates_on_administrator_permission():
     predicate = SyncCog.reannounce_match_cmd.checks[0]
 
@@ -379,9 +518,28 @@ def test_reannounce_match_app_command_gates_on_administrator_permission():
         predicate(SimpleNamespace(permissions=SimpleNamespace(administrator=False)))
     assert predicate(SimpleNamespace(permissions=SimpleNamespace(administrator=True))) is True
 
+async def test_sync_matches_cmd_rejects_unsynced_player(db_session):
+    bot = MagicMock()
+    bot.session_factory.return_value.__aenter__ = AsyncMock(return_value=db_session)
+    bot.session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+    cog = SyncCog(bot)
+
+    interaction = MagicMock()
+    interaction.response.defer = AsyncMock()
+    interaction.followup.send = AsyncMock()
+    target = MagicMock()
+    target.id = 999
+
+    with patch("val_bot.bot.cogs.sync._sync_and_announce", AsyncMock()) as fake_sync:
+        await cog.sync_matches_cmd.callback(cog, interaction, player=target)
+
+    fake_sync.assert_not_awaited()
+    interaction.followup.send.assert_awaited_once()
+    message = interaction.followup.send.await_args.args[0]
+    assert "isn't linked" in message
+
 async def test_sync_matches_cmd_reports_failure_instead_of_hanging():
     bot = MagicMock()
-    bot.sync_announce_channel_id = None  # don't start the background poller
     cog = SyncCog(bot)
 
     interaction = MagicMock()
@@ -400,7 +558,6 @@ async def test_sync_matches_cmd_reports_failure_instead_of_hanging():
 
 async def test_sync_matches_prefix_reports_failure_instead_of_hanging():
     bot = MagicMock()
-    bot.sync_announce_channel_id = None
     cog = SyncCog(bot)
 
     ctx = MagicMock()
