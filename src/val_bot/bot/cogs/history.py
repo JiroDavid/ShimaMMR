@@ -1,7 +1,7 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-from val_bot.bot.views.history_views import fetch_recent_matches, format_match_summary, FullMatchView
+from val_bot.bot.views.history_views import fetch_recent_matches, build_history_embed, MatchHistoryView
 
 class HistoryCog(commands.Cog):
     def __init__(self, bot):
@@ -13,7 +13,6 @@ class HistoryCog(commands.Cog):
         discord_id = str(target.id)
         async with self.bot.session_factory() as session:
             matches = await fetch_recent_matches(session, discord_id)
-            summaries = [format_match_summary(m, discord_id) for m in matches]
 
         if not matches:
             await interaction.response.send_message(
@@ -22,8 +21,8 @@ class HistoryCog(commands.Cog):
             return
 
         await interaction.response.send_message(
-            "\n".join(summaries),
-            view=FullMatchView(self.bot.session_factory, matches[0].id),
+            embed=build_history_embed(target, matches, discord_id),
+            view=MatchHistoryView(self.bot.session_factory, matches),
         )
 
     @commands.command(name="match-history")
@@ -32,15 +31,14 @@ class HistoryCog(commands.Cog):
         discord_id = str(target.id)
         async with self.bot.session_factory() as session:
             matches = await fetch_recent_matches(session, discord_id)
-            summaries = [format_match_summary(m, discord_id) for m in matches]
 
         if not matches:
             await ctx.send(f"{target.mention} has no confirmed match history yet.")
             return
 
         await ctx.send(
-            "\n".join(summaries),
-            view=FullMatchView(self.bot.session_factory, matches[0].id),
+            embed=build_history_embed(target, matches, discord_id),
+            view=MatchHistoryView(self.bot.session_factory, matches),
         )
 
 async def setup(bot):
